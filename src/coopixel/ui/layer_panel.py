@@ -3,7 +3,7 @@ Layer Panel Widget for managing document layers in Coopixel.
 """
 
 from typing import Optional
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDockWidget,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -85,7 +86,17 @@ class LayerPanel(QDockWidget):
         self.dup_btn.setObjectName("secondaryButton")
         self.dup_btn.clicked.connect(self.on_duplicate_layer)
 
-        self.del_btn = QPushButton("Delete")
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setToolTip("Copy Entire Active Layer")
+        self.copy_btn.setObjectName("secondaryButton")
+        self.copy_btn.clicked.connect(self.on_copy_layer)
+
+        self.paste_btn = QPushButton("Paste")
+        self.paste_btn.setToolTip("Paste Copied Layer")
+        self.paste_btn.setObjectName("secondaryButton")
+        self.paste_btn.clicked.connect(self.on_paste_layer)
+
+        self.del_btn = QPushButton("Del")
         self.del_btn.setToolTip("Delete Active Layer")
         self.del_btn.setObjectName("secondaryButton")
         self.del_btn.clicked.connect(self.on_delete_layer)
@@ -102,6 +113,8 @@ class LayerPanel(QDockWidget):
 
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.dup_btn)
+        btn_layout.addWidget(self.copy_btn)
+        btn_layout.addWidget(self.paste_btn)
         btn_layout.addWidget(self.del_btn)
         btn_layout.addWidget(self.up_btn)
         btn_layout.addWidget(self.down_btn)
@@ -111,6 +124,8 @@ class LayerPanel(QDockWidget):
         self.list_widget = QListWidget()
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.list_widget, stretch=1)
 
         # 3. Opacity Slider
@@ -244,5 +259,47 @@ class LayerPanel(QDockWidget):
 
     def on_move_down(self) -> None:
         if self.doc.move_layer_down(self.doc.active_layer_index):
+            self.refresh_list()
+            self.layer_structure_changed.emit()
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        item = self.list_widget.itemAt(pos)
+        if item:
+            index = item.data(Qt.UserRole)
+            self.doc.active_layer_index = index
+
+        menu = QMenu(self)
+        copy_act = menu.addAction("📋 Copy Layer")
+        paste_act = menu.addAction("📥 Paste Layer")
+        paste_act.setEnabled(getattr(LayerPanel, "_shared_layer_clipboard", None) is not None)
+        menu.addSeparator()
+        dup_act = menu.addAction("📑 Duplicate Layer")
+        rename_act = menu.addAction("✏️ Rename Layer")
+        del_act = menu.addAction("🗑️ Delete Layer")
+
+        action = menu.exec_(self.list_widget.mapToGlobal(pos)) if hasattr(menu, 'exec_') else menu.exec(self.list_widget.mapToGlobal(pos))
+        if action == copy_act:
+            self.on_copy_layer()
+        elif action == paste_act:
+            self.on_paste_layer()
+        elif action == dup_act:
+            self.on_duplicate_layer()
+        elif action == rename_act and item:
+            self._on_item_double_clicked(item)
+        elif action == del_act:
+            self.on_delete_layer()
+
+    def on_copy_layer(self) -> None:
+        active = self.doc.active_layer
+        if active:
+            LayerPanel._shared_layer_clipboard = active.clone(name=active.name)
+
+    def on_paste_layer(self) -> None:
+        clipboard = getattr(LayerPanel, "_shared_layer_clipboard", None)
+        if clipboard:
+            cloned = clipboard.clone()
+            insert_idx = self.doc.active_layer_index + 1 if self.doc.layers else 0
+            self.doc.layers.insert(insert_idx, cloned)
+            self.doc.active_layer_index = insert_idx
             self.refresh_list()
             self.layer_structure_changed.emit()

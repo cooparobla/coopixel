@@ -6,8 +6,9 @@ Integrates dark theme, standard photo editor menu bar, tool toolbar, canvas view
 import os
 from typing import Optional
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QMainWindow,
     QMessageBox,
@@ -17,8 +18,9 @@ from PySide6.QtWidgets import (
     QToolButton,
     QWidget,
 )
-from coopixel.models.document import PixelDocument
+from coopixel.models.document import PixelDocument, hex_to_qcolor
 from coopixel.models.history import HistoryStack
+from coopixel.ui.animation_panel import AnimationPanel
 from coopixel.ui.appearance_panel import AppearancePanel
 from coopixel.ui.canvas import CanvasWidget
 from coopixel.ui.color_panel import ColorPanel
@@ -92,6 +94,15 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.appearance_panel)
         self.appearance_panel.hide()
 
+        # ---- Bottom Dock Panels ----
+        self.animation_panel = AnimationPanel(self.doc, self)
+        self.animation_panel.animation_structure_changed.connect(self.on_frame_structure_changed)
+        self.animation_panel.frame_structure_changed.connect(self.on_frame_structure_changed)
+        self.animation_panel.active_frame_changed.connect(self.on_active_frame_changed)
+        self.animation_panel.animation_visual_changed.connect(self.canvas.update)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.animation_panel)
+        self.animation_panel.hide()
+
         # Sync initial colors
         self.canvas.primary_color = self.color_panel.primary_color
         self.canvas.secondary_color = self.color_panel.secondary_color
@@ -136,7 +147,15 @@ class MainWindow(QMainWindow):
         app_act.toggled.connect(self.appearance_panel.setVisible)
         self.appearance_panel.visibilityChanged.connect(app_act.setChecked)
 
+        anim_act = QAction("🎬", self)
+        anim_act.setToolTip("Animation Timeline")
+        anim_act.setCheckable(True)
+        anim_act.setChecked(self.animation_panel.isVisible())
+        anim_act.toggled.connect(self.animation_panel.setVisible)
+        self.animation_panel.visibilityChanged.connect(anim_act.setChecked)
+
         right_tb.addAction(app_act)
+        right_tb.addAction(anim_act)
         self.addToolBar(Qt.RightToolBarArea, right_tb)
 
 
@@ -195,6 +214,23 @@ class MainWindow(QMainWindow):
         self.redo_act.setShortcut(QKeySequence.Redo)
         self.redo_act.triggered.connect(self.on_redo)
         edit_menu.addAction(self.redo_act)
+
+        edit_menu.addSeparator()
+
+        cut_act = QAction("Cu&t", self)
+        cut_act.setShortcut(QKeySequence.Cut)
+        cut_act.triggered.connect(self.on_cut)
+        edit_menu.addAction(cut_act)
+
+        copy_act = QAction("&Copy", self)
+        copy_act.setShortcut(QKeySequence.Copy)
+        copy_act.triggered.connect(self.on_copy)
+        edit_menu.addAction(copy_act)
+
+        paste_act = QAction("&Paste", self)
+        paste_act.setShortcut(QKeySequence.Paste)
+        paste_act.triggered.connect(self.on_paste)
+        edit_menu.addAction(paste_act)
 
         edit_menu.addSeparator()
 
@@ -264,6 +300,10 @@ class MainWindow(QMainWindow):
         toggle_app_act.setText("Appearance & Layer Effects Panel")
         view_menu.addAction(toggle_app_act)
 
+        toggle_anim_act = self.animation_panel.toggleViewAction()
+        toggle_anim_act.setText("Animation Timeline Panel")
+        view_menu.addAction(toggle_anim_act)
+
         # ---- LAYER ----
         layer_menu = menu_bar.addMenu("&Layer")
 
@@ -279,6 +319,18 @@ class MainWindow(QMainWindow):
         del_l_act = QAction("&Delete Layer", self)
         del_l_act.triggered.connect(self.layer_panel.on_delete_layer)
         layer_menu.addAction(del_l_act)
+
+        layer_menu.addSeparator()
+
+        copy_l_act = QAction("Cop&y Layer", self)
+        copy_l_act.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        copy_l_act.triggered.connect(self.layer_panel.on_copy_layer)
+        layer_menu.addAction(copy_l_act)
+
+        paste_l_act = QAction("Pas&te Layer", self)
+        paste_l_act.setShortcut(QKeySequence("Ctrl+Shift+V"))
+        paste_l_act.triggered.connect(self.layer_panel.on_paste_layer)
+        layer_menu.addAction(paste_l_act)
 
         layer_menu.addSeparator()
 
@@ -336,6 +388,7 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         self.layer_panel.set_document(self.doc)
         self.appearance_panel.set_document(self.doc)
+        self.animation_panel.set_document(self.doc)
 
     # ------------------------------------------------------------------
     # Slots
@@ -346,16 +399,32 @@ class MainWindow(QMainWindow):
         self._push_history()
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
+        self.animation_panel.refresh_timeline()
         self.canvas.update()
 
     def on_layer_structure_changed(self) -> None:
         """Called when layers/effects are added/deleted/reordered/duplicated — push history."""
         self._push_history()
         self.appearance_panel.refresh_panel()
+        self.animation_panel.refresh_timeline()
         self.canvas.update()
 
     def on_layer_visual_changed(self) -> None:
         """Called when layer visibility/opacity/lock changes — repaint only, no history."""
+        self.appearance_panel.refresh_panel()
+        self.animation_panel.refresh_timeline()
+        self.canvas.update()
+
+    def on_frame_structure_changed(self) -> None:
+        """Called when frames are added/deleted/duplicated/reordered — push history."""
+        self._push_history()
+        self.layer_panel.refresh_list()
+        self.appearance_panel.refresh_panel()
+        self.canvas.update()
+
+    def on_active_frame_changed(self) -> None:
+        """Called when active frame is changed — updates layer panel, appearance panel & canvas."""
+        self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
         self.canvas.update()
 
@@ -411,11 +480,12 @@ class MainWindow(QMainWindow):
             self.canvas.center_canvas()
             self.canvas.update()
 
-    # ---- Selection Actions ----
+    # ---- Selection & Clipboard Actions ----
 
     def on_select_all(self) -> None:
         self.canvas.selection.select_all(self.doc)
         self.canvas.update()
+        self.status_bar.showMessage("Selected entire canvas", 1500)
 
     def on_deselect(self) -> None:
         self.canvas.selection.clear()
@@ -424,6 +494,126 @@ class MainWindow(QMainWindow):
     def on_invert_selection(self) -> None:
         self.canvas.selection.invert(self.doc)
         self.canvas.update()
+
+    def on_copy(self) -> None:
+        """Copies selected pixels (or active layer pixels) to clipboard."""
+        active = self.doc.active_layer
+        if not active:
+            return
+
+        selected_coords = self.canvas.selection.selected
+        if not selected_coords:
+            # If no selection, copy all pixels of active layer
+            target_coords = set()
+            for key in active.pixels.keys():
+                parts = key.split(",")
+                if len(parts) == 2:
+                    target_coords.add((int(parts[0]), int(parts[1])))
+        else:
+            target_coords = set(selected_coords)
+
+        if not target_coords:
+            self.status_bar.showMessage("Nothing to copy on active layer", 1500)
+            return
+
+        min_x = min(x for x, y in target_coords)
+        min_y = min(y for x, y in target_coords)
+
+        clip_pixels = {}
+        for x, y in target_coords:
+            color = active.get_pixel(x, y)
+            if color:
+                clip_pixels[(x - min_x, y - min_y)] = color
+
+        self.clipboard_data = {
+            "min_x": min_x,
+            "min_y": min_y,
+            "pixels": clip_pixels,
+        }
+
+        # Sync with system clipboard QImage
+        if clip_pixels:
+            max_rel_x = max(rx for rx, ry in clip_pixels.keys())
+            max_rel_y = max(ry for rx, ry in clip_pixels.keys())
+            w = max_rel_x + 1
+            h = max_rel_y + 1
+            img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+            img.fill(QColor(0, 0, 0, 0))
+            p = QPainter(img)
+            for (rx, ry), hex_str in clip_pixels.items():
+                p.setPen(hex_to_qcolor(hex_str))
+                p.drawPoint(rx, ry)
+            p.end()
+            QApplication.clipboard().setImage(img)
+
+        self.status_bar.showMessage(f"Copied {len(clip_pixels)} pixels to clipboard", 2000)
+
+    def on_cut(self) -> None:
+        """Cuts selected pixels (or active layer pixels) to clipboard."""
+        active = self.doc.active_layer
+        if not active or active.locked or not active.visible:
+            return
+
+        self.on_copy()
+        selected_coords = self.canvas.selection.selected
+        if not selected_coords:
+            active.clear_all()
+        else:
+            for x, y in selected_coords:
+                active.clear_pixel(x, y)
+
+        self._push_history()
+        self.canvas.update()
+        self.layer_panel.refresh_list()
+        self.appearance_panel.refresh_panel()
+        self.animation_panel.refresh_timeline()
+        self.status_bar.showMessage("Cut selection", 2000)
+
+    def on_paste(self) -> None:
+        """Pastes clipboard pixels onto the current active layer."""
+        active = self.doc.active_layer
+        if not active or active.locked or not active.visible:
+            self.status_bar.showMessage("Cannot paste on locked/hidden layer", 2000)
+            return
+
+        pasted_coords = []
+
+        # Check internal clipboard first
+        if hasattr(self, "clipboard_data") and self.clipboard_data and "pixels" in self.clipboard_data:
+            min_x = self.clipboard_data.get("min_x", 0)
+            min_y = self.clipboard_data.get("min_y", 0)
+            clip_pixels = self.clipboard_data.get("pixels", {})
+
+            for (rx, ry), hex_color in clip_pixels.items():
+                tx = min_x + rx
+                ty = min_y + ry
+                if self.doc.is_valid_coord(tx, ty):
+                    active.set_pixel(tx, ty, hex_color)
+                    pasted_coords.append((tx, ty))
+        else:
+            # Check system clipboard QImage
+            sys_img = QApplication.clipboard().image()
+            if not sys_img.isNull():
+                w = min(sys_img.width(), self.doc.width)
+                h = min(sys_img.height(), self.doc.height)
+                for x in range(w):
+                    for y in range(h):
+                        qcol = sys_img.pixelColor(x, y)
+                        if qcol.alpha() > 0:
+                            hex_str = f"#{qcol.red():02X}{qcol.green():02X}{qcol.blue():02X}{qcol.alpha():02X}"
+                            active.set_pixel(x, y, hex_str)
+                            pasted_coords.append((x, y))
+
+        if pasted_coords:
+            self.canvas.selection.replace(pasted_coords)
+            self._push_history()
+            self.canvas.update()
+            self.layer_panel.refresh_list()
+            self.appearance_panel.refresh_panel()
+            self.animation_panel.refresh_timeline()
+            self.status_bar.showMessage(f"Pasted {len(pasted_coords)} pixels", 2000)
+        else:
+            self.status_bar.showMessage("Clipboard is empty", 2000)
 
     # ---- File Actions ----
 
@@ -450,6 +640,7 @@ class MainWindow(QMainWindow):
             self.canvas.set_document(self.doc)
             self.layer_panel.set_document(self.doc)
             self.appearance_panel.set_document(self.doc)
+            self.animation_panel.set_document(self.doc)
             self.setWindowTitle("Coopixel - Pixel Art Editor")
 
     def open_file(self, filepath: str) -> bool:
@@ -466,6 +657,7 @@ class MainWindow(QMainWindow):
             self.canvas.set_document(self.doc)
             self.layer_panel.set_document(self.doc)
             self.appearance_panel.set_document(self.doc)
+            self.animation_panel.set_document(self.doc)
             self.setWindowTitle(f"Coopixel - {filepath}")
             self.status_bar.showMessage(f"Opened {filepath}", 3000)
             return True

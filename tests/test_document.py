@@ -148,6 +148,39 @@ def test_layer_stroke_effect():
 
 def test_cli_file_opening():
     app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    assert mw.windowTitle() == "Coopixel - Pixel Art Editor"
+    mw.close()
+
+
+def test_copy_paste_across_layers():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+
+    # Draw pixel on layer 1
+    l1 = mw.doc.active_layer
+    l1.set_pixel(2, 3, "#FF0000FF")
+
+    # Select all canvas and copy
+    mw.on_select_all()
+    assert len(mw.canvas.selection.selected) == mw.doc.width * mw.doc.height
+    mw.on_copy()
+    assert hasattr(mw, "clipboard_data")
+    assert (2, 3) in mw.clipboard_data["pixels"]
+    assert mw.clipboard_data["pixels"][(2, 3)] == "#FF0000FF"
+
+    # Add layer 2 and paste
+    l2 = mw.doc.add_layer("Layer 2")
+    assert mw.doc.active_layer == l2
+    assert l2.get_pixel(2, 3) is None
+
+    mw.on_paste()
+    assert l2.get_pixel(2, 3) == "#FF0000FF"
+    mw.close()
+
+
+def test_cli_file_loading_actual():
+    app = QApplication.instance() or QApplication([])
     doc = PixelDocument(12, 12)
     doc.active_layer.set_pixel(3, 4, "#FF004DFF")
 
@@ -164,3 +197,31 @@ def test_cli_file_opening():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+def test_copy_paste_entire_layer():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+
+    # Configure active layer
+    l1 = mw.doc.active_layer
+    l1.name = "Custom Layer 1"
+    l1.set_pixel(1, 1, "#00FF00FF")
+    l1.opacity = 0.8
+
+    # Copy layer via layer panel
+    mw.layer_panel.on_copy_layer()
+
+    # Switch frame and paste layer
+    mw.doc.add_frame("Frame 2")
+    assert len(mw.doc.layers) == 1
+    assert mw.doc.active_layer.get_pixel(1, 1) is None
+
+    mw.layer_panel.on_paste_layer()
+    assert len(mw.doc.layers) == 2
+    pasted = mw.doc.active_layer
+    assert pasted.name == "Custom Layer 1 Copy"
+    assert pasted.get_pixel(1, 1) == "#00FF00FF"
+    assert pasted.opacity == 0.8
+    mw.close()
+

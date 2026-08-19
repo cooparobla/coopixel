@@ -75,8 +75,9 @@ class Layer:
     def clear_all(self) -> None:
         self.pixels.clear()
 
-    def clone(self) -> "Layer":
-        new_layer = Layer(name=f"{self.name} Copy", visible=self.visible, locked=self.locked, opacity=self.opacity)
+    def clone(self, name: Optional[str] = None) -> "Layer":
+        layer_name = name if name is not None else f"{self.name} Copy"
+        new_layer = Layer(name=layer_name, visible=self.visible, locked=self.locked, opacity=self.opacity)
         new_layer.pixels = dict(self.pixels)
         new_layer.effects = [effect_from_dict(eff.to_dict()) for eff in self.effects if eff]
         return new_layer
@@ -113,17 +114,15 @@ class Layer:
         return layer
 
 
-class PixelDocument:
-    """Represents a multi-layer pixel art document."""
+class AnimationFrame:
+    """Represents a single animation frame containing layers."""
 
-    def __init__(self, width: int = 32, height: int = 32, filepath: Optional[str] = None):
-        self.width = max(1, width)
-        self.height = max(1, height)
-        self.filepath = filepath
+    def __init__(self, name: str = "Frame 1", duration_ms: int = 100):
+        self.name = name
+        self.duration_ms = duration_ms
         self.layers: List[Layer] = []
         self.active_layer_index: int = 0
-
-        # Initialize with one default layer
+        # Initialize with default layer
         self.add_layer("Background")
 
     @property
@@ -179,6 +178,273 @@ class PixelDocument:
             return True
         return False
 
+    def clone(self) -> "AnimationFrame":
+        new_frame = AnimationFrame(name=f"{self.name} Copy", duration_ms=self.duration_ms)
+        new_frame.layers = [l.clone() for l in self.layers]
+        new_frame.active_layer_index = min(self.active_layer_index, max(0, len(new_frame.layers) - 1))
+        return new_frame
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "duration_ms": self.duration_ms,
+            "active_layer": self.active_layer_index,
+            "layers": [layer.to_dict() for layer in self.layers],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AnimationFrame":
+        frame = cls(
+            name=data.get("name", "Frame"),
+            duration_ms=int(data.get("duration_ms", 100))
+        )
+        frame.layers.clear()
+        raw_layers = data.get("layers", [])
+        if raw_layers:
+            for l_data in raw_layers:
+                frame.layers.append(Layer.from_dict(l_data))
+        else:
+            frame.add_layer("Background")
+        frame.active_layer_index = max(0, min(int(data.get("active_layer", 0)), len(frame.layers) - 1))
+        return frame
+
+
+class Animation:
+    """Represents a named distinct animation sequence containing frames."""
+
+    def __init__(self, name: str = "new-animation", fps: int = 10):
+        self.name = name
+        self.fps = fps
+        self.frames: List[AnimationFrame] = []
+        self.active_frame_index: int = 0
+        # Initialize with default frame
+        self.frames.append(AnimationFrame("Frame 1"))
+
+    @property
+    def active_frame(self) -> AnimationFrame:
+        if 0 <= self.active_frame_index < len(self.frames):
+            return self.frames[self.active_frame_index]
+        return self.frames[0]
+
+    def add_frame(self, name: Optional[str] = None) -> AnimationFrame:
+        if name is None:
+            name = f"Frame {len(self.frames) + 1}"
+        frame = AnimationFrame(name=name)
+        insert_idx = self.active_frame_index + 1
+        self.frames.insert(insert_idx, frame)
+        self.active_frame_index = insert_idx
+        return frame
+
+    def duplicate_frame(self, index: int) -> Optional[AnimationFrame]:
+        if 0 <= index < len(self.frames):
+            cloned = self.frames[index].clone()
+            self.frames.insert(index + 1, cloned)
+            self.active_frame_index = index + 1
+            return cloned
+        return None
+
+    def delete_frame(self, index: int) -> bool:
+        if len(self.frames) <= 1:
+            return False  # Minimum 1 frame rule
+        if 0 <= index < len(self.frames):
+            del self.frames[index]
+            if self.active_frame_index >= len(self.frames):
+                self.active_frame_index = len(self.frames) - 1
+            return True
+        return False
+
+    def select_frame(self, index: int) -> bool:
+        if 0 <= index < len(self.frames):
+            self.active_frame_index = index
+            return True
+        return False
+
+    def move_frame_left(self, index: int) -> bool:
+        if 0 < index < len(self.frames):
+            self.frames[index], self.frames[index - 1] = self.frames[index - 1], self.frames[index]
+            if self.active_frame_index == index:
+                self.active_frame_index = index - 1
+            elif self.active_frame_index == index - 1:
+                self.active_frame_index = index
+            return True
+        return False
+
+    def move_frame_right(self, index: int) -> bool:
+        if 0 <= index < len(self.frames) - 1:
+            self.frames[index], self.frames[index + 1] = self.frames[index + 1], self.frames[index]
+            if self.active_frame_index == index:
+                self.active_frame_index = index + 1
+            elif self.active_frame_index == index + 1:
+                self.active_frame_index = index
+            return True
+        return False
+
+    def clone(self) -> "Animation":
+        anim = Animation(name=f"{self.name} Copy", fps=self.fps)
+        anim.frames = [f.clone() for f in self.frames]
+        anim.active_frame_index = min(self.active_frame_index, max(0, len(anim.frames) - 1))
+        return anim
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "fps": self.fps,
+            "active_frame": self.active_frame_index,
+            "frames": [f.to_dict() for f in self.frames],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Animation":
+        anim = cls(
+            name=data.get("name", "new-animation"),
+            fps=int(data.get("fps", 10))
+        )
+        anim.frames.clear()
+        raw_frames = data.get("frames", [])
+        if raw_frames:
+            for f_data in raw_frames:
+                anim.frames.append(AnimationFrame.from_dict(f_data))
+        else:
+            anim.frames.append(AnimationFrame("Frame 1"))
+        anim.active_frame_index = max(0, min(int(data.get("active_frame", 0)), len(anim.frames) - 1))
+        return anim
+
+
+class PixelDocument:
+    """Represents a multi-layer, multi-frame, multi-animation pixel art document."""
+
+    def __init__(self, width: int = 32, height: int = 32, filepath: Optional[str] = None):
+        self.width = max(1, width)
+        self.height = max(1, height)
+        self.filepath = filepath
+        self.animations: List[Animation] = []
+        self.active_animation_index: int = 0
+
+        # Every new file MUST have at least one animation named "new-animation"
+        self.animations.append(Animation("new-animation"))
+
+    @property
+    def active_animation(self) -> Animation:
+        if 0 <= self.active_animation_index < len(self.animations):
+            return self.animations[self.active_animation_index]
+        return self.animations[0]
+
+    # Delegates animation properties to active animation
+    @property
+    def frames(self) -> List[AnimationFrame]:
+        return self.active_animation.frames
+
+    @frames.setter
+    def frames(self, new_frames: List[AnimationFrame]) -> None:
+        self.active_animation.frames = new_frames
+
+    @property
+    def active_frame_index(self) -> int:
+        return self.active_animation.active_frame_index
+
+    @active_frame_index.setter
+    def active_frame_index(self, idx: int) -> None:
+        self.active_animation.active_frame_index = idx
+
+    @property
+    def fps(self) -> int:
+        return self.active_animation.fps
+
+    @fps.setter
+    def fps(self, val: int) -> None:
+        self.active_animation.fps = val
+
+    @property
+    def active_frame(self) -> AnimationFrame:
+        return self.active_animation.active_frame
+
+    # Delegates layer properties to active frame
+    @property
+    def layers(self) -> List[Layer]:
+        return self.active_frame.layers
+
+    @layers.setter
+    def layers(self, new_layers: List[Layer]) -> None:
+        self.active_frame.layers = new_layers
+
+    @property
+    def active_layer_index(self) -> int:
+        return self.active_frame.active_layer_index
+
+    @active_layer_index.setter
+    def active_layer_index(self, idx: int) -> None:
+        self.active_frame.active_layer_index = idx
+
+    @property
+    def active_layer(self) -> Optional[Layer]:
+        return self.active_frame.active_layer
+
+    # Animation Management API
+    def add_animation(self, name: Optional[str] = None) -> Animation:
+        if name is None:
+            name = f"new-animation-{len(self.animations) + 1}"
+        anim = Animation(name=name)
+        self.animations.append(anim)
+        self.active_animation_index = len(self.animations) - 1
+        return anim
+
+    def rename_animation(self, index: int, new_name: str) -> bool:
+        if 0 <= index < len(self.animations) and new_name.strip():
+            self.animations[index].name = new_name.strip()
+            return True
+        return False
+
+    def delete_animation(self, index: int) -> bool:
+        if len(self.animations) <= 1:
+            return False  # Minimum 1 animation rule
+        if 0 <= index < len(self.animations):
+            del self.animations[index]
+            if self.active_animation_index >= len(self.animations):
+                self.active_animation_index = len(self.animations) - 1
+            return True
+        return False
+
+    def select_animation(self, index: int) -> bool:
+        if 0 <= index < len(self.animations):
+            self.active_animation_index = index
+            return True
+        return False
+
+    # Frame delegates
+    def add_frame(self, name: Optional[str] = None) -> AnimationFrame:
+        return self.active_animation.add_frame(name)
+
+    def duplicate_frame(self, index: int) -> Optional[AnimationFrame]:
+        return self.active_animation.duplicate_frame(index)
+
+    def delete_frame(self, index: int) -> bool:
+        return self.active_animation.delete_frame(index)
+
+    def select_frame(self, index: int) -> bool:
+        return self.active_animation.select_frame(index)
+
+    def move_frame_left(self, index: int) -> bool:
+        return self.active_animation.move_frame_left(index)
+
+    def move_frame_right(self, index: int) -> bool:
+        return self.active_animation.move_frame_right(index)
+
+    # Layer delegates
+    def add_layer(self, name: Optional[str] = None) -> Layer:
+        return self.active_frame.add_layer(name)
+
+    def duplicate_layer(self, index: int) -> Optional[Layer]:
+        return self.active_frame.duplicate_layer(index)
+
+    def delete_layer(self, index: int) -> bool:
+        return self.active_frame.delete_layer(index)
+
+    def move_layer_up(self, index: int) -> bool:
+        return self.active_frame.move_layer_up(index)
+
+    def move_layer_down(self, index: int) -> bool:
+        return self.active_frame.move_layer_down(index)
+
     def is_valid_coord(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
@@ -189,8 +455,8 @@ class PixelDocument:
             "version": "1.0",
             "width": self.width,
             "height": self.height,
-            "active_layer": self.active_layer_index,
-            "layers": [layer.to_dict() for layer in self.layers],
+            "active_animation": self.active_animation_index,
+            "animations": [anim.to_dict() for anim in self.animations],
         }
 
     @classmethod
@@ -198,17 +464,45 @@ class PixelDocument:
         width = int(data.get("width", 32))
         height = int(data.get("height", 32))
         doc = cls(width=width, height=height, filepath=filepath)
-        doc.layers.clear()
+        doc.animations.clear()
 
-        raw_layers = data.get("layers", [])
-        if raw_layers:
-            for l_data in raw_layers:
-                doc.layers.append(Layer.from_dict(l_data))
+        raw_anims = data.get("animations", [])
+        if raw_anims:
+            for a_data in raw_anims:
+                doc.animations.append(Animation.from_dict(a_data))
         else:
-            doc.add_layer("Background")
+            # Single-animation legacy format
+            anim = Animation("new-animation")
+            anim.fps = int(data.get("fps", 10))
+            anim.onion_skin = bool(data.get("onion_skin", False))
+            anim.frames.clear()
 
-        active_idx = int(data.get("active_layer", 0))
-        doc.active_layer_index = max(0, min(active_idx, len(doc.layers) - 1))
+            raw_frames = data.get("frames", [])
+            if raw_frames:
+                for f_data in raw_frames:
+                    anim.frames.append(AnimationFrame.from_dict(f_data))
+            else:
+                frame = AnimationFrame("Frame 1")
+                frame.layers.clear()
+                raw_layers = data.get("layers", [])
+                if raw_layers:
+                    for l_data in raw_layers:
+                        frame.layers.append(Layer.from_dict(l_data))
+                else:
+                    frame.add_layer("Background")
+                frame.active_layer_index = max(0, min(int(data.get("active_layer", 0)), len(frame.layers) - 1))
+                anim.frames.append(frame)
+
+            if not anim.frames:
+                anim.frames.append(AnimationFrame("Frame 1"))
+            anim.active_frame_index = max(0, min(int(data.get("active_frame", 0)), len(anim.frames) - 1))
+            doc.animations.append(anim)
+
+        if not doc.animations:
+            doc.animations.append(Animation("new-animation"))
+
+        active_anim_idx = int(data.get("active_animation", 0))
+        doc.active_animation_index = max(0, min(active_anim_idx, len(doc.animations) - 1))
         return doc
 
     def save_to_pix(self, filepath: str, passphrase: str = None) -> None:
@@ -230,13 +524,17 @@ class PixelDocument:
             cmap = CAMLMap.load_pix(filepath)
         return cls.from_dict(cmap.data, filepath=filepath)
 
-    def render_composite_qimage(self) -> QImage:
-        """Renders all visible layers into a single QImage with transparency, opacity, and layer effects."""
+    def render_frame_qimage(self, frame_index: int) -> QImage:
+        """Renders specified frame's layers into a single QImage with transparency and layer effects."""
+        if not (0 <= frame_index < len(self.frames)):
+            frame_index = self.active_frame_index
+        target_frame = self.frames[frame_index]
+
         image = QImage(self.width, self.height, QImage.Format_ARGB32_Premultiplied)
         image.fill(QColor(0, 0, 0, 0))  # Clear transparent
 
         painter = QPainter(image)
-        for layer in self.layers:
+        for layer in target_frame.layers:
             if not layer.visible or layer.opacity <= 0:
                 continue
 
@@ -281,7 +579,12 @@ class PixelDocument:
         painter.end()
         return image
 
+    def render_composite_qimage(self) -> QImage:
+        """Renders active frame into composite QImage."""
+        return self.render_frame_qimage(self.active_frame_index)
+
     def export_png(self, filepath: str) -> bool:
-        """Exports composite image to PNG format."""
+        """Exports active frame composite image to PNG format."""
         image = self.render_composite_qimage()
         return image.save(filepath, "PNG")
+
