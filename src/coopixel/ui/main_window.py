@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self.appearance_panel = AppearancePanel(self.doc, self)
         self.appearance_panel.effect_changed.connect(self.on_layer_structure_changed)
         self.addDockWidget(Qt.RightDockWidgetArea, self.appearance_panel)
+        self.appearance_panel.hide()
 
         # Sync initial colors
         self.canvas.primary_color = self.color_panel.primary_color
