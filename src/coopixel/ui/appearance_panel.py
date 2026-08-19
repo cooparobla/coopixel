@@ -1,0 +1,262 @@
+"""
+Appearance & Layer Effects Dock Panel for Coopixel.
+Allows adding, configuring, toggling, and removing layer effects (e.g. Stroke) on the active layer.
+"""
+
+from typing import Optional
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDockWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+from coopixel.models.document import PixelDocument
+from coopixel.models.effects import StrokeEffect
+
+
+def _qcolor_from_hex(hex_str: str) -> QColor:
+    s = hex_str.lstrip("#")
+    if len(s) == 8:
+        return QColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16))
+    elif len(s) == 6:
+        return QColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255)
+    return QColor(hex_str)
+
+
+def _hex_from_qcolor(col: QColor) -> str:
+    return f"#{col.red():02X}{col.green():02X}{col.blue():02X}{col.alpha():02X}"
+
+
+def _to_css_rgba(hex_rrggbbaa: str) -> str:
+    s = hex_rrggbbaa.lstrip("#")
+    if len(s) == 8:
+        r, g, b, a = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16)
+        return f"rgba({r},{g},{b},{round(a/255.0, 4)})"
+    return hex_rrggbbaa
+
+
+class StrokeEffectWidget(QFrame):
+    """Widget control box for configuring a single StrokeEffect instance."""
+
+    changed = Signal()
+    delete_requested = Signal()
+
+    def __init__(self, stroke: StrokeEffect, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.stroke = stroke
+        self.setStyleSheet("QFrame { background: #1E2330; border: 1px solid #2D3748; border-radius: 6px; }")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
+
+        # ---- Title bar with Enable Checkbox and Delete Button ----
+        header = QHBoxLayout()
+        header.setSpacing(6)
+
+        self.enable_cb = QCheckBox("Stroke")
+        self.enable_cb.setChecked(stroke.enabled)
+        self.enable_cb.setStyleSheet("font-weight: 600; color: #F1F5F9;")
+        self.enable_cb.toggled.connect(self._on_enable_toggled)
+
+        self.del_btn = QPushButton("✕")
+        self.del_btn.setFixedSize(20, 20)
+        self.del_btn.setToolTip("Remove Effect")
+        self.del_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #94A3B8; font-weight: bold; }"
+            "QPushButton:hover { color: #EF4444; }"
+        )
+        self.del_btn.clicked.connect(self.delete_requested.emit)
+
+        header.addWidget(self.enable_cb)
+        header.addStretch(1)
+        header.addWidget(self.del_btn)
+        layout.addLayout(header)
+
+        # ---- Controls Grid ----
+        props_widget = QWidget()
+        props_layout = QVBoxLayout(props_widget)
+        props_layout.setContentsMargins(4, 0, 4, 2)
+        props_layout.setSpacing(6)
+
+        # 1. Color Picker Row
+        col_row = QHBoxLayout()
+        col_row.setSpacing(6)
+        col_lbl = QLabel("Color:")
+        col_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
+
+        self.color_swatch = QFrame()
+        self.color_swatch.setFixedSize(36, 22)
+        self.color_swatch.setCursor(Qt.PointingHandCursor)
+        self.color_swatch.setToolTip("Click to change stroke color")
+        self.color_swatch.mousePressEvent = lambda e: self._pick_color()
+
+        col_row.addWidget(col_lbl)
+        col_row.addWidget(self.color_swatch)
+        col_row.addStretch(1)
+        props_layout.addLayout(col_row)
+
+        # 2. Size & Position Row
+        size_row = QHBoxLayout()
+        size_row.setSpacing(6)
+
+        size_lbl = QLabel("Size:")
+        size_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self.size_spin = QSpinBox()
+        self.size_spin.setRange(1, 10)
+        self.size_spin.setValue(stroke.size)
+        self.size_spin.setSuffix(" px")
+        self.size_spin.valueChanged.connect(self._on_size_changed)
+
+        pos_lbl = QLabel("Pos:")
+        pos_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self.pos_combo = QComboBox()
+        self.pos_combo.addItems(["outside", "inside", "center"])
+        self.pos_combo.setCurrentText(stroke.position)
+        self.pos_combo.currentTextChanged.connect(self._on_pos_changed)
+
+        size_row.addWidget(size_lbl)
+        size_row.addWidget(self.size_spin)
+        size_row.addWidget(pos_lbl)
+        size_row.addWidget(self.pos_combo)
+        props_layout.addLayout(size_row)
+
+        layout.addWidget(props_widget)
+        self._update_swatch()
+
+    def _update_swatch(self) -> None:
+        css = _to_css_rgba(self.stroke.color)
+        self.color_swatch.setStyleSheet(
+            f"background-color: {css}; border: 1px solid #64748B; border-radius: 4px;"
+        )
+
+    def _pick_color(self) -> None:
+        initial = _qcolor_from_hex(self.stroke.color)
+        col = QColorDialog.getColor(initial, self, "Select Stroke Color", QColorDialog.ShowAlphaChannel)
+        if col.isValid():
+            self.stroke.color = _hex_from_qcolor(col)
+            self._update_swatch()
+            self.changed.emit()
+
+    def _on_enable_toggled(self, checked: bool) -> None:
+        self.stroke.enabled = checked
+        self.changed.emit()
+
+    def _on_size_changed(self, val: int) -> None:
+        self.stroke.size = val
+        self.changed.emit()
+
+    def _on_pos_changed(self, pos_str: str) -> None:
+        self.stroke.position = pos_str
+        self.changed.emit()
+
+
+class AppearancePanel(QDockWidget):
+    """Dock panel for managing active layer effects."""
+
+    effect_changed = Signal()
+
+    def __init__(self, doc: Optional[PixelDocument] = None, parent: Optional[QWidget] = None):
+        super().__init__("Appearance", parent)
+        self.doc: PixelDocument = doc if doc is not None else PixelDocument()
+        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+
+        main_widget = QWidget()
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
+
+        # 1. Layer Name Indicator
+        self.layer_name_lbl = QLabel("Target: None")
+        self.layer_name_lbl.setStyleSheet("font-weight: 600; color: #94A3B8; font-size: 11px;")
+        main_layout.addWidget(self.layer_name_lbl)
+
+        # 2. Add Effect Action Button
+        self.add_btn = QPushButton("+ Add Layer Effect")
+        self.add_btn.setToolTip("Add new effect to active layer")
+        self.add_btn.setStyleSheet(
+            "QPushButton { background: #2563EB; color: #FFFFFF; font-weight: 600; border-radius: 4px; padding: 4px 8px; }"
+            "QPushButton:hover { background: #1D4ED8; }"
+        )
+        self.add_btn.clicked.connect(self._show_add_effect_menu)
+        main_layout.addWidget(self.add_btn)
+
+        # 3. Scrollable Effects Container
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.effects_container = QWidget()
+        self.effects_layout = QVBoxLayout(self.effects_container)
+        self.effects_layout.setContentsMargins(0, 0, 0, 0)
+        self.effects_layout.setSpacing(6)
+        self.effects_layout.addStretch(1)
+
+        self.scroll_area.setWidget(self.effects_container)
+        main_layout.addWidget(self.scroll_area, stretch=1)
+
+        self.setWidget(main_widget)
+        self.refresh_panel()
+
+    def set_document(self, doc: PixelDocument) -> None:
+        self.doc = doc
+        self.refresh_panel()
+
+    def refresh_panel(self) -> None:
+        """Rebuild the effects list from the active layer."""
+        # Clear existing effect widgets
+        while self.effects_layout.count() > 0:
+            item = self.effects_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        active = self.doc.active_layer
+        if not active:
+            self.layer_name_lbl.setText("Target: None")
+            self.add_btn.setEnabled(False)
+            return
+
+        self.layer_name_lbl.setText(f"Layer: {active.name}")
+        self.add_btn.setEnabled(True)
+
+        # Add widget for each effect on active layer
+        for idx, effect in enumerate(active.effects):
+            if isinstance(effect, StrokeEffect):
+                w = StrokeEffectWidget(effect, self)
+                w.changed.connect(self.effect_changed.emit)
+                w.delete_requested.connect(lambda i=idx: self.remove_effect(i))
+                self.effects_layout.addWidget(w)
+
+        self.effects_layout.addStretch(1)
+
+    def _show_add_effect_menu(self) -> None:
+        menu = QMenu(self)
+        stroke_action = menu.addAction("🎨 Stroke (Outline)")
+        action = menu.exec(self.add_btn.mapToGlobal(self.add_btn.rect().bottomLeft()))
+        if action == stroke_action:
+            self.add_stroke_effect()
+
+    def add_stroke_effect(self) -> None:
+        active = self.doc.active_layer
+        if active:
+            active.effects.append(StrokeEffect(enabled=True, size=1, color="#000000FF", position="outside"))
+            self.refresh_panel()
+            self.effect_changed.emit()
+
+    def remove_effect(self, index: int) -> None:
+        active = self.doc.active_layer
+        if active and 0 <= index < len(active.effects):
+            del active.effects[index]
+            self.refresh_panel()
+            self.effect_changed.emit()

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coopixel"
+version = "0.1.0"
+description = "A dark-mode pixel art image editor powered by PySide6 and pycaml"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "PySide6>=6.5.0",
+    "Pillow>=10.0.0",
+    "pytest>=7.0.0",
+    "pycaml",
+]
+
+
+[project.scripts]
+coopixel = "coopixel.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coopixel"]
+
+[tool.uv.sources]
+pycaml = { path = "../pycaml", editable = true }
