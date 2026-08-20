@@ -248,3 +248,22 @@ def test_import_png_as_layer():
             os.remove(tmp_path)
 
 
+def test_add_and_delete_layer_effects():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+
+    # Add stroke effect
+    mw.appearance_panel.add_stroke_effect()
+    active = mw.doc.active_layer
+    assert len(active.effects) == 1
+
+    # Find the StrokeEffectWidget and trigger deletion button click
+    effect_widget = mw.appearance_panel.effects_layout.itemAt(0).widget()
+    assert effect_widget is not None
+    effect_widget.del_btn.click()
+
+    assert len(active.effects) == 0
+    mw.close()
+
+
+

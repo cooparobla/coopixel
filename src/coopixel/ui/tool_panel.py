@@ -27,7 +27,7 @@ from coopixel.tools.shapes import CircleTool, LineTool, RectangleTool
 def _vline() -> QFrame:
     sep = QFrame()
     sep.setFrameShape(QFrame.VLine)
-    sep.setStyleSheet("color: #2D3748;")
+    sep.setStyleSheet("color: #333333;")
     return sep
 
 
@@ -37,9 +37,9 @@ def _tool_btn(icon_label: str, tooltip: str) -> QToolButton:
     btn.setToolTip(tooltip)
     btn.setCheckable(True)
     btn.setStyleSheet(
-        "QToolButton { background: #1E2330; border: 1px solid #2D3748; border-radius: 4px; padding: 4px 7px; font-size: 14px; color: #F1F5F9; }"
-        "QToolButton:checked { background: #2563EB; border-color: #3B82F6; color: #FFFFFF; }"
-        "QToolButton:hover { background: #263352; }"
+        "QToolButton { background: #282828; border: 1px solid #333333; border-radius: 4px; padding: 4px 7px; font-size: 13px; color: #F1F5F9; }"
+        "QToolButton:checked { background: #2E2620; border-color: #F97316; color: #F97316; }"
+        "QToolButton:hover { background: #332B25; border-color: #F97316; }"
     )
     return btn
 
@@ -51,7 +51,7 @@ class ToolPanel(QFrame):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setStyleSheet("background-color: #1A1D24; border-bottom: 1px solid #2D3748;")
+        self.setStyleSheet("background-color: #202020; border-bottom: 1px solid #333333;")
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(8, 4, 8, 4)

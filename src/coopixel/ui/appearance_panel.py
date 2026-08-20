@@ -55,7 +55,7 @@ class StrokeEffectWidget(QFrame):
     def __init__(self, stroke: StrokeEffect, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.stroke = stroke
-        self.setStyleSheet("QFrame { background: #1E2330; border: 1px solid #2D3748; border-radius: 6px; }")
+        self.setStyleSheet("QFrame { background: #282828; border: 1px solid #333333; border-radius: 6px; }")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -70,12 +70,12 @@ class StrokeEffectWidget(QFrame):
         self.enable_cb.setStyleSheet("font-weight: 600; color: #F1F5F9;")
         self.enable_cb.toggled.connect(self._on_enable_toggled)
 
-        self.del_btn = QPushButton("✕")
-        self.del_btn.setFixedSize(20, 20)
-        self.del_btn.setToolTip("Remove Effect")
+        self.del_btn = QPushButton("🗑️ Remove")
+        self.del_btn.setToolTip("Remove Effect from Active Layer")
+        self.del_btn.setObjectName("secondaryButton")
         self.del_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: none; color: #94A3B8; font-weight: bold; }"
-            "QPushButton:hover { color: #EF4444; }"
+            "QPushButton#secondaryButton { background-color: #282828; color: #EF4444; border: 1px solid #333333; padding: 2px 8px; font-size: 10px; font-weight: bold; }"
+            "QPushButton#secondaryButton:hover { background-color: #3F1D1D; border-color: #EF4444; color: #FFFFFF; }"
         )
         self.del_btn.clicked.connect(self.delete_requested.emit)
 
@@ -83,6 +83,9 @@ class StrokeEffectWidget(QFrame):
         header.addStretch(1)
         header.addWidget(self.del_btn)
         layout.addLayout(header)
+
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
 
         # ---- Controls Grid ----
         props_widget = QWidget()
@@ -161,6 +164,13 @@ class StrokeEffectWidget(QFrame):
         self.stroke.position = pos_str
         self.changed.emit()
 
+    def _on_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        del_act = menu.addAction("🗑️ Remove Effect")
+        action = menu.exec_(self.mapToGlobal(pos)) if hasattr(menu, 'exec_') else menu.exec(self.mapToGlobal(pos))
+        if action == del_act:
+            self.delete_requested.emit()
+
 
 class AppearancePanel(QDockWidget):
     """Dock panel for managing active layer effects."""
@@ -186,8 +196,8 @@ class AppearancePanel(QDockWidget):
         self.add_btn = QPushButton("+ Add Layer Effect")
         self.add_btn.setToolTip("Add new effect to active layer")
         self.add_btn.setStyleSheet(
-            "QPushButton { background: #2563EB; color: #FFFFFF; font-weight: 600; border-radius: 4px; padding: 4px 8px; }"
-            "QPushButton:hover { background: #1D4ED8; }"
+            "QPushButton { background: #C25E00; color: #FFFFFF; font-weight: 600; border-radius: 4px; padding: 4px 8px; }"
+            "QPushButton:hover { background: #D97706; }"
         )
         self.add_btn.clicked.connect(self._show_add_effect_menu)
         main_layout.addWidget(self.add_btn)
@@ -231,11 +241,11 @@ class AppearancePanel(QDockWidget):
         self.add_btn.setEnabled(True)
 
         # Add widget for each effect on active layer
-        for idx, effect in enumerate(active.effects):
+        for effect in list(active.effects):
             if isinstance(effect, StrokeEffect):
                 w = StrokeEffectWidget(effect, self)
                 w.changed.connect(self.effect_changed.emit)
-                w.delete_requested.connect(lambda i=idx: self.remove_effect(i))
+                w.delete_requested.connect(lambda *args, eff=effect: self.remove_effect_object(eff))
                 self.effects_layout.addWidget(w)
 
         self.effects_layout.addStretch(1)
@@ -254,9 +264,10 @@ class AppearancePanel(QDockWidget):
             self.refresh_panel()
             self.effect_changed.emit()
 
-    def remove_effect(self, index: int) -> None:
+    def remove_effect_object(self, effect: StrokeEffect) -> None:
+        """Removes a specific layer effect instance from the active layer."""
         active = self.doc.active_layer
-        if active and 0 <= index < len(active.effects):
-            del active.effects[index]
+        if active and effect in active.effects:
+            active.effects.remove(effect)
             self.refresh_panel()
             self.effect_changed.emit()

@@ -26,6 +26,7 @@ from coopixel.ui.canvas import CanvasWidget
 from coopixel.ui.color_panel import ColorPanel
 from coopixel.ui.dialogs import AboutDialog, CanvasSizeDialog, NewCanvasDialog
 from coopixel.ui.layer_panel import LayerPanel
+from coopixel.ui.tag_panel import TagPanel
 from coopixel.ui.tool_panel import ToolPanel
 
 
@@ -50,7 +51,7 @@ class MainWindow(QMainWindow):
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #121417; }")
+        scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #141414; }")
         scroll_area.setWidget(self.canvas)
         self.setCentralWidget(scroll_area)
 
@@ -94,6 +95,11 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.appearance_panel)
         self.appearance_panel.hide()
 
+        self.tag_panel = TagPanel(self.doc, self)
+        self.tag_panel.tag_visibility_changed.connect(self.on_tag_visibility_changed)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.tag_panel)
+        self.tag_panel.hide()
+
         # ---- Bottom Dock Panels ----
         self.animation_panel = AnimationPanel(self.doc, self)
         self.animation_panel.animation_structure_changed.connect(self.on_frame_structure_changed)
@@ -134,10 +140,10 @@ class MainWindow(QMainWindow):
         right_tb.setMovable(False)
         right_tb.setOrientation(Qt.Vertical)
         right_tb.setStyleSheet(
-            "QToolBar { background-color: #1A1D24; border-left: 1px solid #2D3748; spacing: 4px; padding: 4px; }"
-            "QToolButton { background: #1E2330; border: 1px solid #2D3748; border-radius: 4px; padding: 4px 7px; font-size: 14px; color: #F1F5F9; }"
-            "QToolButton:hover { background: #263352; }"
-            "QToolButton:checked { background: #2563EB; border-color: #3B82F6; color: #FFFFFF; }"
+            "QToolBar { background-color: #202020; border-left: 1px solid #333333; spacing: 4px; padding: 4px; }"
+            "QToolButton { background: #282828; border: 1px solid #333333; border-radius: 4px; padding: 4px 7px; font-size: 13px; color: #F1F5F9; }"
+            "QToolButton:hover { background: #332B25; border-color: #F97316; }"
+            "QToolButton:checked { background: #2E2620; border-color: #F97316; color: #F97316; }"
         )
 
         app_act = QAction("✨", self)
@@ -147,6 +153,13 @@ class MainWindow(QMainWindow):
         app_act.toggled.connect(self.appearance_panel.setVisible)
         self.appearance_panel.visibilityChanged.connect(app_act.setChecked)
 
+        tag_act = QAction("🏷️", self)
+        tag_act.setToolTip("Tag Manager")
+        tag_act.setCheckable(True)
+        tag_act.setChecked(self.tag_panel.isVisible())
+        tag_act.toggled.connect(self.tag_panel.setVisible)
+        self.tag_panel.visibilityChanged.connect(tag_act.setChecked)
+
         anim_act = QAction("🎬", self)
         anim_act.setToolTip("Animation Timeline")
         anim_act.setCheckable(True)
@@ -155,6 +168,7 @@ class MainWindow(QMainWindow):
         self.animation_panel.visibilityChanged.connect(anim_act.setChecked)
 
         right_tb.addAction(app_act)
+        right_tb.addAction(tag_act)
         right_tb.addAction(anim_act)
         self.addToolBar(Qt.RightToolBarArea, right_tb)
 
@@ -194,6 +208,11 @@ class MainWindow(QMainWindow):
         import_act.setShortcut(QKeySequence("Ctrl+Shift+I"))
         import_act.triggered.connect(self.on_file_import_png)
         file_menu.addAction(import_act)
+
+        import_pal_act = QAction("Import &Palette PNG...", self)
+        import_pal_act.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        import_pal_act.triggered.connect(self.color_panel.on_load_palette_png)
+        file_menu.addAction(import_pal_act)
 
         export_act = QAction("&Export PNG...", self)
         export_act.setShortcut(QKeySequence("Ctrl+E"))
@@ -394,6 +413,7 @@ class MainWindow(QMainWindow):
         self.layer_panel.set_document(self.doc)
         self.appearance_panel.set_document(self.doc)
         self.animation_panel.set_document(self.doc)
+        self.tag_panel.set_document(self.doc)
 
     # ------------------------------------------------------------------
     # Slots
@@ -405,17 +425,28 @@ class MainWindow(QMainWindow):
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
+        self.tag_panel.refresh_tags()
         self.canvas.update()
 
     def on_layer_structure_changed(self) -> None:
-        """Called when layers/effects are added/deleted/reordered/duplicated — push history."""
+        """Called when layers/effects/tags are added/deleted/reordered/duplicated — push history."""
         self._push_history()
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
+        self.tag_panel.refresh_tags()
         self.canvas.update()
 
     def on_layer_visual_changed(self) -> None:
         """Called when layer visibility/opacity/lock changes — repaint only, no history."""
+        self.appearance_panel.refresh_panel()
+        self.animation_panel.refresh_timeline()
+        self.tag_panel.refresh_tags()
+        self.canvas.update()
+
+    def on_tag_visibility_changed(self) -> None:
+        """Called when tag global visibility eye toggle is clicked."""
+        self._push_history()
+        self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
         self.canvas.update()

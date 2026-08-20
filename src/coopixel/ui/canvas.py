@@ -100,8 +100,8 @@ class CanvasWidget(QWidget):
         end_x = rect.x() + rect.width()
         end_y = rect.y() + rect.height()
 
-        c1 = QColor("#1E232A")
-        c2 = QColor("#161A20")
+        c1 = QColor("#222222")
+        c2 = QColor("#1A1A1A")
 
         y = start_y
         row = 0
@@ -121,7 +121,7 @@ class CanvasWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, False)
 
         # Background fill
-        painter.fillRect(self.rect(), QColor("#121417"))
+        painter.fillRect(self.rect(), QColor("#141414"))
 
         # Calculate canvas rectangle in widget screen space
         cw = self.doc.width * self.zoom_level
@@ -163,7 +163,7 @@ class CanvasWidget(QWidget):
                 painter.drawLine(QPointF(canvas_rect.left(), ly), QPointF(canvas_rect.right(), ly))
 
         # 5. Canvas Border
-        border_pen = QPen(QColor("#3B82F6"), 1.5)
+        border_pen = QPen(QColor("#F97316"), 1.5)
         painter.setPen(border_pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(canvas_rect)

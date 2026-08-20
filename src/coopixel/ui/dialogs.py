@@ -108,7 +108,7 @@ class AboutDialog(QDialog):
         layout.setSpacing(12)
 
         title_lbl = QLabel("🎨 Coopixel")
-        title_lbl.setStyleSheet("font-size: 22px; font-weight: bold; color: #3B82F6;")
+        title_lbl.setStyleSheet("font-size: 22px; font-weight: bold; color: #F97316;")
         title_lbl.setAlignment(Qt.AlignCenter)
 
         ver_lbl = QLabel("Version 0.1.0 (Dark Mode Edition)")

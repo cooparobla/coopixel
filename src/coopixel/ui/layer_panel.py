@@ -48,8 +48,11 @@ class LayerItemWidget(QWidget):
         self.lock_cb.setToolTip("Lock / Unlock Layer")
         self.lock_cb.toggled.connect(lambda checked: self.lock_changed.emit(self.index, checked))
 
-        # Name label
-        self.name_label = QLabel(layer.name)
+        # Name & Tag label
+        name_text = layer.name
+        if layer.tag:
+            name_text += f" [{layer.tag}]"
+        self.name_label = QLabel(name_text)
         self.name_label.setStyleSheet("font-weight: 500; padding-left: 2px;")
 
         layout.addWidget(self.vis_cb)
@@ -273,6 +276,7 @@ class LayerPanel(QDockWidget):
         paste_act = menu.addAction("📥 Paste Layer")
         paste_act.setEnabled(getattr(LayerPanel, "_shared_layer_clipboard", None) is not None)
         menu.addSeparator()
+        tag_act = menu.addAction("🏷️ Set Tag...")
         dup_act = menu.addAction("📑 Duplicate Layer")
         rename_act = menu.addAction("✏️ Rename Layer")
         del_act = menu.addAction("🗑️ Delete Layer")
@@ -282,6 +286,8 @@ class LayerPanel(QDockWidget):
             self.on_copy_layer()
         elif action == paste_act:
             self.on_paste_layer()
+        elif action == tag_act:
+            self.on_set_layer_tag()
         elif action == dup_act:
             self.on_duplicate_layer()
         elif action == rename_act and item:
@@ -303,3 +309,14 @@ class LayerPanel(QDockWidget):
             self.doc.active_layer_index = insert_idx
             self.refresh_list()
             self.layer_structure_changed.emit()
+
+    def on_set_layer_tag(self) -> None:
+        active = self.doc.active_layer
+        if active:
+            new_tag, ok = QInputDialog.getText(
+                self, "Set Layer Tag", "Tag Name (e.g. 'character', 'bg', 'shadow'):", text=active.tag
+            )
+            if ok:
+                active.tag = new_tag.strip()
+                self.refresh_list()
+                self.layer_structure_changed.emit()

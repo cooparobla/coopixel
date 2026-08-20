@@ -31,8 +31,8 @@ class FrameCardWidget(QFrame):
         self.setFixedWidth(72)
         self.setFixedHeight(84)
 
-        bg_color = "#2563EB" if is_active else "#1E232A"
-        border_color = "#3B82F6" if is_active else "#2D3748"
+        bg_color = "#2E2620" if is_active else "#222222"
+        border_color = "#F97316" if is_active else "#333333"
         self.setStyleSheet(
             f"FrameCardWidget {{ background-color: {bg_color}; border: 2px solid {border_color}; border-radius: 6px; }}"
             f"QLabel {{ color: #F1F5F9; border: none; font-size: 11px; font-weight: bold; }}"
@@ -49,7 +49,7 @@ class FrameCardWidget(QFrame):
         self.thumb_label.setAlignment(Qt.AlignCenter)
         pix = QPixmap.fromImage(thumbnail).scaled(48, 48, Qt.KeepAspectRatio, Qt.FastTransformation)
         self.thumb_label.setPixmap(pix)
-        self.thumb_label.setStyleSheet("background-color: #121417; border: 1px solid #333B4D; border-radius: 4px;")
+        self.thumb_label.setStyleSheet("background-color: #181818; border: 1px solid #333333; border-radius: 4px;")
 
         # Title Label
         self.title_label = QLabel(f"#{index + 1}")
@@ -94,9 +94,9 @@ class AnimationPanel(QDockWidget):
         self.anim_combo.setToolTip("Select Active Animation Sequence")
         self.anim_combo.setMinimumWidth(160)
         self.anim_combo.setStyleSheet(
-            "QComboBox { background-color: #1E232A; color: #F1F5F9; border: 1px solid #2D3748; border-radius: 4px; padding: 3px 8px; font-weight: 500; }"
+            "QComboBox { background-color: #242424; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-weight: 500; }"
             "QComboBox::drop-down { border: none; }"
-            "QComboBox QAbstractItemView { background-color: #1A1D24; color: #F1F5F9; selection-background-color: #2563EB; }"
+            "QComboBox QAbstractItemView { background-color: #202020; color: #F1F5F9; selection-background-color: #2E2620; selection-color: #F97316; }"
         )
         self.anim_combo.currentIndexChanged.connect(self.on_animation_selected)
 

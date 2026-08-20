@@ -32,13 +32,21 @@ def qcolor_to_hex(qcol: QColor) -> str:
 
 
 class Layer:
-    """Represents a single layer in the pixel document."""
+    """Represents a single drawing layer with sparse pixel data and effects."""
 
-    def __init__(self, name: str = "Layer", visible: bool = True, locked: bool = False, opacity: float = 1.0):
+    def __init__(
+        self,
+        name: str = "Layer",
+        visible: bool = True,
+        locked: bool = False,
+        opacity: float = 1.0,
+        tag: str = "",
+    ):
         self.name = name
         self.visible = visible
         self.locked = locked
         self.opacity = max(0.0, min(1.0, float(opacity)))
+        self.tag = tag.strip()
         # Sparse dictionary mapping "x,y" string coordinates to hex color "#RRGGBBAA"
         self.pixels: Dict[str, str] = {}
         # Extensible list of layer effects
@@ -78,7 +86,9 @@ class Layer:
 
     def clone(self, name: Optional[str] = None) -> "Layer":
         layer_name = name if name is not None else f"{self.name} Copy"
-        new_layer = Layer(name=layer_name, visible=self.visible, locked=self.locked, opacity=self.opacity)
+        new_layer = Layer(
+            name=layer_name, visible=self.visible, locked=self.locked, opacity=self.opacity, tag=self.tag
+        )
         new_layer.pixels = dict(self.pixels)
         new_layer.effects = [effect_from_dict(eff.to_dict()) for eff in self.effects if eff]
         return new_layer
@@ -89,6 +99,7 @@ class Layer:
             "visible": self.visible,
             "locked": self.locked,
             "opacity": round(self.opacity, 3),
+            "tag": self.tag,
             "pixels": self.pixels,
             "effects": [eff.to_dict() for eff in self.effects],
         }
@@ -100,6 +111,7 @@ class Layer:
             visible=data.get("visible", True),
             locked=data.get("locked", False),
             opacity=float(data.get("opacity", 1.0)),
+            tag=data.get("tag", ""),
         )
         pixels_raw = data.get("pixels", {})
         if isinstance(pixels_raw, dict):
@@ -108,9 +120,9 @@ class Layer:
         raw_effects = data.get("effects", [])
         if isinstance(raw_effects, list):
             for eff_data in raw_effects:
-                eff_obj = effect_from_dict(eff_data)
-                if eff_obj:
-                    layer.effects.append(eff_obj)
+                eff = effect_from_dict(eff_data)
+                if eff:
+                    layer.effects.append(eff)
 
         return layer
 
@@ -611,4 +623,46 @@ class PixelDocument:
                     layer.set_pixel(x, y, hex_str)
 
         return layer
+
+    # ------------------------------------------------------------------
+    # Tag Management Across Frames & Animations
+    # ------------------------------------------------------------------
+
+    def get_all_tags(self) -> List[str]:
+        """Returns a sorted list of all unique non-empty tags across all frames and animations."""
+        tags = set()
+        for anim in self.animations:
+            for frame in anim.frames:
+                for layer in frame.layers:
+                    if layer.tag and layer.tag.strip():
+                        tags.add(layer.tag.strip())
+        return sorted(list(tags))
+
+    def get_layers_by_tag(self, tag: str) -> List[Layer]:
+        """Returns all layers with the given tag across all frames and animations."""
+        target = tag.strip().lower()
+        matched = []
+        for anim in self.animations:
+            for frame in anim.frames:
+                for layer in frame.layers:
+                    if layer.tag.strip().lower() == target:
+                        matched.append(layer)
+        return matched
+
+    def is_tag_visible(self, tag: str) -> bool:
+        """Returns True if any layer with the specified tag is visible."""
+        layers = self.get_layers_by_tag(tag)
+        if not layers:
+            return False
+        return any(l.visible for l in layers)
+
+    def set_tag_visibility(self, tag: str, visible: bool) -> None:
+        """Sets visibility for all layers across all frames and animations with the specified tag."""
+        target = tag.strip().lower()
+        for anim in self.animations:
+            for frame in anim.frames:
+                for layer in frame.layers:
+                    if layer.tag.strip().lower() == target:
+                        layer.visible = visible
+
 
