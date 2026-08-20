@@ -190,6 +190,11 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        import_act = QAction("&Import Image as Layer...", self)
+        import_act.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        import_act.triggered.connect(self.on_file_import_png)
+        file_menu.addAction(import_act)
+
         export_act = QAction("&Export PNG...", self)
         export_act.setShortcut(QKeySequence("Ctrl+E"))
         export_act.triggered.connect(self.on_file_export_png)
@@ -695,6 +700,25 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("File saved successfully.", 3000)
             except Exception as e:
                 QMessageBox.critical(self, "Error Saving File", f"Failed to save file:\n{e}")
+
+    def on_file_import_png(self) -> None:
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Import Image as Layer", "", "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
+        )
+        if filepath:
+            try:
+                layer = self.doc.import_image_as_layer(filepath)
+                if layer:
+                    self._push_history()
+                    self.canvas.update()
+                    self.layer_panel.refresh_list()
+                    self.appearance_panel.refresh_panel()
+                    self.animation_panel.refresh_timeline()
+                    self.status_bar.showMessage(f"Imported {os.path.basename(filepath)} as layer '{layer.name}'", 3000)
+                else:
+                    QMessageBox.warning(self, "Import Failed", "Could not load image file.")
+            except Exception as e:
+                QMessageBox.critical(self, "Import Error", f"Failed to import image:\n{e}")
 
     def on_file_export_png(self) -> None:
         filepath, _ = QFileDialog.getSaveFileName(

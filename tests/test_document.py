@@ -225,3 +225,26 @@ def test_copy_paste_entire_layer():
     assert pasted.opacity == 0.8
     mw.close()
 
+
+def test_import_png_as_layer():
+    doc = PixelDocument(16, 16)
+
+    # Create a temporary PNG image
+    test_img = QImage(4, 4, QImage.Format_ARGB32)
+    test_img.fill(QColor(0, 0, 0, 0))
+    test_img.setPixelColor(1, 2, QColor(255, 0, 0, 255))
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        test_img.save(tmp_path, "PNG")
+        imported_layer = doc.import_image_as_layer(tmp_path)
+        assert imported_layer is not None
+        assert imported_layer.get_pixel(1, 2) == "#FF0000FF"
+        assert len(doc.layers) == 2
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+

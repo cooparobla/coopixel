@@ -4,6 +4,7 @@ Uses sparse dictionary storage for pixels: only filled/colored pixels are stored
 Supports extensible layer effects (e.g. Stroke).
 """
 
+import os
 from typing import Dict, List, Optional, Tuple
 from PySide6.QtGui import QColor, QImage, QPainter
 from pycaml import CAMLMap
@@ -587,4 +588,27 @@ class PixelDocument:
         """Exports active frame composite image to PNG format."""
         image = self.render_composite_qimage()
         return image.save(filepath, "PNG")
+
+    def import_image_as_layer(self, filepath: str, name: Optional[str] = None) -> Optional[Layer]:
+        """Imports an image file (PNG/JPG/BMP) as a new layer in the active frame."""
+        image = QImage(filepath)
+        if image.isNull():
+            return None
+
+        if name is None:
+            basename = os.path.basename(filepath)
+            name = os.path.splitext(basename)[0]
+
+        layer = self.add_layer(name=name)
+        w = min(image.width(), self.width)
+        h = min(image.height(), self.height)
+
+        for x in range(w):
+            for y in range(h):
+                qcol = image.pixelColor(x, y)
+                if qcol.alpha() > 0:
+                    hex_str = f"#{qcol.red():02X}{qcol.green():02X}{qcol.blue():02X}{qcol.alpha():02X}"
+                    layer.set_pixel(x, y, hex_str)
+
+        return layer
 
