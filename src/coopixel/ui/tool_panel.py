@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from coopixel.tools.base import Tool
-from coopixel.tools.drawing import BucketFillTool, EraserTool, PencilTool
+from coopixel.tools.crop import CropTool
+from coopixel.tools.drawing import BucketFillTool, DrawTool, EraserTool, PencilTool
+from coopixel.tools.move import MoveTool
 from coopixel.tools.picker import ColorPickerTool
 from coopixel.tools.selection import SelectionTool
 from coopixel.tools.shapes import CircleTool, LineTool, RectangleTool
@@ -48,6 +50,12 @@ class ToolPanel(QFrame):
     tool_selected = Signal(Tool)
     brush_size_changed = Signal(int)
     shape_filled_changed = Signal(bool)
+    crop_commit_requested = Signal()
+    crop_cancel_requested = Signal()
+    crop_fit_sel_requested = Signal()
+    crop_fit_content_requested = Signal()
+    selection_cleared = Signal()
+    move_nudge_requested = Signal(int, int)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -66,34 +74,36 @@ class ToolPanel(QFrame):
 
         self.selection_tool = SelectionTool()
         self.fill_tool = BucketFillTool()
+        self.crop_tool = CropTool()
+        self.move_tool = MoveTool()
+        self.draw_tool = DrawTool()
 
         self.tools: Dict[str, Tool] = {
+            "crop": self.crop_tool,
+            "move": self.move_tool,
             "selection": self.selection_tool,
-            "pencil": PencilTool(),
+            "draw": self.draw_tool,
+            "pencil": self.draw_tool,
             "eraser": EraserTool(),
             "picker": ColorPickerTool(),
             "fill": self.fill_tool,
-            "line": LineTool(),
-            "rectangle": RectangleTool(),
-            "circle": CircleTool(),
         }
 
         tool_defs = [
+            ("crop",      "✂️", "Crop Tool (K)"),
+            ("move",      "🖐️", "Move Tool (V)"),
             ("selection", "🔲", "Selection Tool (S)"),
-            ("pencil",    "✏️", "Pencil Tool (P)"),
+            ("draw",      "✏️", "Draw Tool (P)"),
             ("eraser",    "🧹", "Eraser Tool (E)"),
             ("picker",    "🧪", "Color Picker (I)"),
             ("fill",      "🪣", "Bucket Fill Tool (F)"),
-            ("line",      "📏", "Line Tool (L)"),
-            ("rectangle", "⬜", "Rectangle Tool (R)"),
-            ("circle",    "⭕", "Circle Tool (C)"),
         ]
         self._tool_order = [k for k, _, _ in tool_defs]
 
         for tool_key, icon, tip in tool_defs:
             tool_obj = self.tools[tool_key]
             btn = _tool_btn(icon, tip)
-            if tool_key == "pencil":
+            if tool_key == "draw":
                 btn.setChecked(True)
             self.btn_group.addButton(btn)
             tools_layout.addWidget(btn)
@@ -124,8 +134,35 @@ class ToolPanel(QFrame):
         # ---- Context Options Stacked Widget ----
         self.ctx_stack = QStackedWidget()
 
-        # Page 0 — Empty (Pencil / Eraser / Picker)
-        self.ctx_stack.addWidget(QWidget())
+        # Page 0 — Draw Modes (Pencil / Line / Rectangle / Circle)
+        draw_widget = QWidget()
+        draw_layout = QHBoxLayout(draw_widget)
+        draw_layout.setContentsMargins(0, 0, 0, 0)
+        draw_layout.setSpacing(4)
+        draw_lbl = QLabel("Draw:")
+        draw_lbl.setStyleSheet("color: #94A3B8; font-weight: 500;")
+        draw_layout.addWidget(draw_lbl)
+
+        self.draw_mode_group = QButtonGroup(self)
+        self.draw_mode_group.setExclusive(True)
+        draw_modes = [
+            (DrawTool.PENCIL,    "✏️", "Pencil / Freehand Drawing"),
+            (DrawTool.LINE,      "📏", "Line Tool: Drag to draw a straight line"),
+            (DrawTool.RECTANGLE, "⬜", "Rectangle Tool: Drag to draw a box"),
+            (DrawTool.CIRCLE,    "⭕", "Circle Tool: Drag to draw an ellipse"),
+        ]
+        self._draw_mode_btns = {}
+        for mode_key, icon, tip in draw_modes:
+            b = _tool_btn(icon, tip)
+            if mode_key == DrawTool.PENCIL:
+                b.setChecked(True)
+            self.draw_mode_group.addButton(b)
+            self._draw_mode_btns[mode_key] = b
+            draw_layout.addWidget(b)
+            b.clicked.connect(lambda _chk, mk=mode_key: self._on_draw_mode(mk))
+
+        draw_layout.addStretch(1)
+        self.ctx_stack.addWidget(draw_widget)
 
         # Page 1 — Selection Modes
         sel_widget = QWidget()
@@ -139,15 +176,15 @@ class ToolPanel(QFrame):
         self.sel_mode_group = QButtonGroup(self)
         self.sel_mode_group.setExclusive(True)
         sel_modes = [
-            (SelectionTool.DRAW,        "✏️", "Draw Selection: Paint pixels in/out of selection"),
             (SelectionTool.BOX,         "⬜", "Box Selection: Drag to select a rectangle"),
+            (SelectionTool.DRAW,        "✏️", "Draw Selection: Paint pixels in/out of selection"),
             (SelectionTool.CIRCLE,      "⭕", "Circle Selection: Drag to select an ellipse"),
             (SelectionTool.FILL_CONTIG, "🪣", "Contiguous Selection: Select connected same-color region"),
             (SelectionTool.FILL_GLOBAL, "🌐", "Global Selection: Select all matching color pixels"),
         ]
         for mode_key, icon, tip in sel_modes:
             b = _tool_btn(icon, tip)
-            if mode_key == SelectionTool.DRAW:
+            if mode_key == SelectionTool.BOX:
                 b.setChecked(True)
             self.sel_mode_group.addButton(b)
             sel_layout.addWidget(b)
@@ -193,6 +230,88 @@ class ToolPanel(QFrame):
         fill_layout.addStretch(1)
         self.ctx_stack.addWidget(fill_widget)
 
+        # Page 3 — Crop Options
+        crop_widget = QWidget()
+        crop_layout = QHBoxLayout(crop_widget)
+        crop_layout.setContentsMargins(0, 0, 0, 0)
+        crop_layout.setSpacing(6)
+
+        crop_lbl = QLabel("Crop:")
+        crop_lbl.setStyleSheet("color: #F97316; font-weight: bold;")
+        crop_layout.addWidget(crop_lbl)
+
+        commit_btn = QPushButton("✔️ Commit Crop")
+        commit_btn.setToolTip("Commit crop to current box (Enter)")
+        commit_btn.setStyleSheet(
+            "QPushButton { background: #166534; border: 1px solid #22C55E; color: #FFFFFF; font-weight: bold; padding: 4px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background: #15803D; }"
+        )
+        commit_btn.clicked.connect(self.crop_commit_requested.emit)
+        crop_layout.addWidget(commit_btn)
+
+        cancel_btn = QPushButton("✕ Reset Box")
+        cancel_btn.setToolTip("Clear crop box (Esc)")
+        cancel_btn.setStyleSheet(
+            "QPushButton { background: #374151; border: 1px solid #4B5563; color: #F3F4F6; padding: 4px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background: #4B5563; }"
+        )
+        cancel_btn.clicked.connect(self.crop_cancel_requested.emit)
+        crop_layout.addWidget(cancel_btn)
+
+        fit_sel_btn = QPushButton("Fit Selection")
+        fit_sel_btn.setToolTip("Set crop box to active selection bounds")
+        fit_sel_btn.setStyleSheet(
+            "QPushButton { background: #1E293B; border: 1px solid #334155; color: #94A3B8; padding: 4px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background: #334155; color: #F8FAFC; }"
+        )
+        fit_sel_btn.clicked.connect(self.crop_fit_sel_requested.emit)
+        crop_layout.addWidget(fit_sel_btn)
+
+        fit_content_btn = QPushButton("Fit Content")
+        fit_content_btn.setToolTip("Set crop box to non-transparent pixel content bounds")
+        fit_content_btn.setStyleSheet(
+            "QPushButton { background: #1E293B; border: 1px solid #334155; color: #94A3B8; padding: 4px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background: #334155; color: #F8FAFC; }"
+        )
+        fit_content_btn.clicked.connect(self.crop_fit_content_requested.emit)
+        crop_layout.addWidget(fit_content_btn)
+
+        crop_layout.addStretch(1)
+        self.ctx_stack.addWidget(crop_widget)
+
+        # Page 4 — Move Options
+        move_widget = QWidget()
+        move_layout = QHBoxLayout(move_widget)
+        move_layout.setContentsMargins(0, 0, 0, 0)
+        move_layout.setSpacing(6)
+
+        move_lbl = QLabel("Move:")
+        move_lbl.setStyleSheet("color: #38BDF8; font-weight: bold;")
+        move_layout.addWidget(move_lbl)
+
+        nudge_btns = [
+            ("←", -1, 0, "Nudge Left 1px"),
+            ("→", 1, 0, "Nudge Right 1px"),
+            ("↑", 0, -1, "Nudge Up 1px"),
+            ("↓", 0, 1, "Nudge Down 1px"),
+        ]
+        for symbol, dx, dy, tip in nudge_btns:
+            nb = QPushButton(symbol)
+            nb.setToolTip(tip)
+            nb.setFixedSize(30, 26)
+            nb.setStyleSheet(
+                "QPushButton { background: #1E293B; border: 1px solid #334155; color: #F8FAFC; font-weight: bold; border-radius: 4px; }"
+                "QPushButton:hover { background: #334155; border-color: #38BDF8; color: #38BDF8; }"
+            )
+            nb.clicked.connect(lambda _chk, x=dx, y=dy: self.move_nudge_requested.emit(x, y))
+            move_layout.addWidget(nb)
+
+        move_layout.addStretch(1)
+        self.ctx_stack.addWidget(move_widget)
+
+        # Page 5 — Empty (Eraser / Picker)
+        self.ctx_stack.addWidget(QWidget())
+
         main_layout.addWidget(self.ctx_stack)
         main_layout.addStretch(1)
 
@@ -212,28 +331,60 @@ class ToolPanel(QFrame):
         self.selection_tool.selection = sel
 
     def select_tool_by_key(self, tool_key: str) -> None:
-        if tool_key not in self.tools:
+        actual_key = tool_key
+        if tool_key in ("draw", "pencil"):
+            self.draw_tool.mode = DrawTool.PENCIL
+            self._update_draw_mode_buttons()
+            actual_key = "draw"
+        elif tool_key == "line":
+            self.draw_tool.mode = DrawTool.LINE
+            self._update_draw_mode_buttons()
+            actual_key = "draw"
+        elif tool_key == "rectangle":
+            self.draw_tool.mode = DrawTool.RECTANGLE
+            self._update_draw_mode_buttons()
+            actual_key = "draw"
+        elif tool_key == "circle":
+            self.draw_tool.mode = DrawTool.CIRCLE
+            self._update_draw_mode_buttons()
+            actual_key = "draw"
+
+        if actual_key not in self.tools:
             return
-        tool = self.tools[tool_key]
-        idx = self._tool_order.index(tool_key) if tool_key in self._tool_order else -1
+
+        tool = self.tools[actual_key]
+        idx = self._tool_order.index(actual_key) if actual_key in self._tool_order else -1
         if idx >= 0:
             btns = self.btn_group.buttons()
             if 0 <= idx < len(btns):
                 btns[idx].setChecked(True)
-        self._on_tool_clicked(tool, tool_key)
+        self._on_tool_clicked(tool, actual_key)
 
     # ------------------------------------------------------------------
     # Internal slots
     # ------------------------------------------------------------------
 
     def _on_tool_clicked(self, tool: Tool, key: str) -> None:
-        if key == "selection":
+        if key in ("draw", "pencil"):
+            self.ctx_stack.setCurrentIndex(0)
+        elif key == "selection":
             self.ctx_stack.setCurrentIndex(1)
         elif key == "fill":
             self.ctx_stack.setCurrentIndex(2)
+        elif key == "crop":
+            self.ctx_stack.setCurrentIndex(3)
+        elif key == "move":
+            self.ctx_stack.setCurrentIndex(4)
         else:
-            self.ctx_stack.setCurrentIndex(0)
+            self.ctx_stack.setCurrentIndex(5)
         self.tool_selected.emit(tool)
+
+    def _on_draw_mode(self, mode: str) -> None:
+        self.draw_tool.mode = mode
+
+    def _update_draw_mode_buttons(self) -> None:
+        if hasattr(self, "_draw_mode_btns") and self.draw_tool.mode in self._draw_mode_btns:
+            self._draw_mode_btns[self.draw_tool.mode].setChecked(True)
 
     def _on_sel_mode(self, mode: str) -> None:
         self.selection_tool.mode = mode
@@ -243,7 +394,10 @@ class ToolPanel(QFrame):
 
     def _on_clear_selection(self) -> None:
         if self._canvas_selection is not None:
+            was_not_empty = not self._canvas_selection.is_empty()
             self._canvas_selection.clear()
+            if was_not_empty:
+                self.selection_cleared.emit()
         if self.parent():
             canvas = getattr(self.parent(), "canvas", None)
             if canvas:
@@ -251,7 +405,10 @@ class ToolPanel(QFrame):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and self._canvas_selection:
+            was_not_empty = not self._canvas_selection.is_empty()
             self._canvas_selection.clear()
+            if was_not_empty:
+                self.selection_cleared.emit()
             if self.parent():
                 canvas = getattr(self.parent(), "canvas", None)
                 if canvas:

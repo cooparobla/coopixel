@@ -7,6 +7,7 @@ from typing import Dict, Optional, Set, Tuple
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
     QMouseEvent,
     QPainter,
     QPen,
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import QWidget
 from coopixel.models.document import PixelDocument, hex_to_qcolor
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
+from coopixel.tools.crop import CropTool
+from coopixel.tools.move import MoveTool
 from coopixel.tools.selection import SelectionTool
 
 
@@ -25,6 +28,10 @@ class CanvasWidget(QWidget):
     stroke_committed = Signal()
     # Emitted on live pixel changes during a stroke (mouse_move) — triggers repaint only, NO history
     canvas_updated = Signal()
+    # Emitted when a crop box is committed via canvas interaction (Enter / double-click)
+    crop_committed = Signal(int, int, int, int)
+    # Emitted when a selection is created, modified, or cleared via canvas interaction
+    selection_committed = Signal()
 
     def __init__(self, doc: Optional[PixelDocument] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -172,7 +179,11 @@ class CanvasWidget(QWidget):
         if not self.selection.is_empty():
             self._draw_selection(painter)
 
-        # 7. Hover cursor indicator
+        # 7. Crop Box Overlay
+        if isinstance(self.active_tool, CropTool):
+            self._draw_crop_overlay(painter)
+
+        # 8. Hover cursor indicator
         if self.hover_coord:
             hx, hy = self.hover_coord
             if self.doc.is_valid_coord(hx, hy):
@@ -185,6 +196,86 @@ class CanvasWidget(QWidget):
                 c_pen = QPen(QColor("#60A5FA"), 1.5, Qt.DashLine)
                 painter.setPen(c_pen)
                 painter.drawRect(cursor_rect)
+
+    def _draw_crop_overlay(self, painter: QPainter) -> None:
+        """Renders Photoshop-style crop overlay: dimmed dark outside area + dashed border + handle corners."""
+        if not isinstance(self.active_tool, CropTool):
+            return
+        crop_box = self.active_tool.crop_box
+        if not crop_box:
+            return
+
+        cx, cy, cw, ch = crop_box
+        z = self.zoom_level
+        ox = self.pan_offset.x()
+        oy = self.pan_offset.y()
+
+        crop_screen_rect = QRectF(ox + cx * z, oy + cy * z, cw * z, ch * z)
+        canvas_screen_rect = QRectF(ox, oy, self.doc.width * z, self.doc.height * z)
+
+        # Dim regions outside crop box
+        dim_color = QColor(0, 0, 0, 160)
+
+        # Top dim
+        if crop_screen_rect.top() > canvas_screen_rect.top():
+            painter.fillRect(
+                QRectF(canvas_screen_rect.left(), canvas_screen_rect.top(), canvas_screen_rect.width(), crop_screen_rect.top() - canvas_screen_rect.top()),
+                dim_color,
+            )
+        # Bottom dim
+        if crop_screen_rect.bottom() < canvas_screen_rect.bottom():
+            painter.fillRect(
+                QRectF(canvas_screen_rect.left(), crop_screen_rect.bottom(), canvas_screen_rect.width(), canvas_screen_rect.bottom() - crop_screen_rect.bottom()),
+                dim_color,
+            )
+        # Left dim
+        painter.fillRect(
+            QRectF(canvas_screen_rect.left(), crop_screen_rect.top(), max(0.0, crop_screen_rect.left() - canvas_screen_rect.left()), crop_screen_rect.height()),
+            dim_color,
+        )
+        # Right dim
+        painter.fillRect(
+            QRectF(crop_screen_rect.right(), crop_screen_rect.top(), max(0.0, canvas_screen_rect.right() - crop_screen_rect.right()), crop_screen_rect.height()),
+            dim_color,
+        )
+
+        # Crop Box Border
+        border_pen = QPen(QColor("#F97316"), 2.0, Qt.DashLine)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(crop_screen_rect)
+
+        # Corner handle markers
+        handle_size = 6.0
+        painter.setPen(QPen(QColor("#F97316"), 1.0))
+        painter.setBrush(QColor("#FFFFFF"))
+
+        corners = [
+            crop_screen_rect.topLeft(),
+            crop_screen_rect.topRight(),
+            crop_screen_rect.bottomLeft(),
+            crop_screen_rect.bottomRight(),
+        ]
+        for corner in corners:
+            h_rect = QRectF(corner.x() - handle_size / 2, corner.y() - handle_size / 2, handle_size, handle_size)
+            painter.drawRect(h_rect)
+
+        # Dimension badge
+        label_text = f" {cw} × {ch} px "
+        painter.setFont(QFont("Sans", 9, QFont.Bold))
+        fm = painter.fontMetrics()
+        lbl_w = fm.horizontalAdvance(label_text) + 8
+        lbl_h = fm.height() + 4
+        lbl_x = max(canvas_screen_rect.left(), crop_screen_rect.left())
+        lbl_y = max(canvas_screen_rect.top(), crop_screen_rect.top() - lbl_h - 4)
+
+        lbl_rect = QRectF(lbl_x, lbl_y, lbl_w, lbl_h)
+        painter.fillRect(lbl_rect, QColor("#1E293B"))
+        painter.setPen(QPen(QColor("#F97316"), 1.0))
+        painter.drawRect(lbl_rect)
+
+        painter.setPen(QColor("#F8FAFC"))
+        painter.drawText(lbl_rect, Qt.AlignCenter, label_text)
 
     def _draw_selection(self, painter: QPainter) -> None:
         """Renders the selection overlay: semi-transparent fill + dashed border on edges."""
@@ -315,6 +406,7 @@ class CanvasWidget(QWidget):
                 self.stroke_committed.emit()
 
             if self._is_selection_tool():
+                self.selection_committed.emit()
                 self.update()
 
             self.update()
@@ -336,3 +428,54 @@ class CanvasWidget(QWidget):
         self.pan_offset = QPointF(cursor_pos.x() - new_rel_x, cursor_pos.y() - new_rel_y)
 
         self.update()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and isinstance(self.active_tool, CropTool):
+            crop_tool: CropTool = self.active_tool
+            if crop_tool.crop_box:
+                cx, cy, cw, ch = crop_tool.crop_box
+                px, py = self.window_to_canvas_coord(event.position())
+                if cx <= px < cx + cw and cy <= py < cy + ch:
+                    self.crop_committed.emit(cx, cy, cw, ch)
+                    return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if isinstance(self.active_tool, CropTool):
+            crop_tool: CropTool = self.active_tool
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if crop_tool.crop_box:
+                    cx, cy, cw, ch = crop_tool.crop_box
+                    self.crop_committed.emit(cx, cy, cw, ch)
+                    return
+            elif event.key() == Qt.Key_Escape:
+                crop_tool.clear_box()
+                self.update()
+                return
+
+        if isinstance(self.active_tool, MoveTool):
+            move_tool: MoveTool = self.active_tool
+            dx, dy = 0, 0
+            if event.key() == Qt.Key_Left:
+                dx = -1
+            elif event.key() == Qt.Key_Right:
+                dx = 1
+            elif event.key() == Qt.Key_Up:
+                dy = -1
+            elif event.key() == Qt.Key_Down:
+                dy = 1
+
+            if dx != 0 or dy != 0:
+                changed = move_tool.nudge(self.doc, dx, dy, selection=self.selection)
+                if changed:
+                    self.stroke_committed.emit()
+                    self.update()
+                return
+
+        if event.key() == Qt.Key_Escape and not self.selection.is_empty():
+            self.selection.clear()
+            self.selection_committed.emit()
+            self.update()
+            return
+
+        super().keyPressEvent(event)

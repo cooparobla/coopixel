@@ -461,6 +461,115 @@ class PixelDocument:
     def is_valid_coord(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
+    def resize_canvas(
+        self,
+        new_width: int,
+        new_height: int,
+        anchor: str = "top-left",
+        offset_x: Optional[int] = None,
+        offset_y: Optional[int] = None,
+    ) -> None:
+        """Resizes canvas to new_width x new_height using an anchor position or custom offsets.
+
+        Anchor positions:
+          'top-left', 'top-center', 'top-right',
+          'middle-left', 'center', 'middle-right',
+          'bottom-left', 'bottom-center', 'bottom-right'
+        """
+        new_width = max(1, int(new_width))
+        new_height = max(1, int(new_height))
+
+        if offset_x is None or offset_y is None:
+            anchor = anchor.lower().strip()
+            if anchor == "top-center":
+                off_x = (new_width - self.width) // 2
+                off_y = 0
+            elif anchor == "top-right":
+                off_x = new_width - self.width
+                off_y = 0
+            elif anchor == "middle-left":
+                off_x = 0
+                off_y = (new_height - self.height) // 2
+            elif anchor == "center":
+                off_x = (new_width - self.width) // 2
+                off_y = (new_height - self.height) // 2
+            elif anchor == "middle-right":
+                off_x = new_width - self.width
+                off_y = (new_height - self.height) // 2
+            elif anchor == "bottom-left":
+                off_x = 0
+                off_y = new_height - self.height
+            elif anchor == "bottom-center":
+                off_x = (new_width - self.width) // 2
+                off_y = new_height - self.height
+            elif anchor == "bottom-right":
+                off_x = new_width - self.width
+                off_y = new_height - self.height
+            else:  # top-left
+                off_x = 0
+                off_y = 0
+        else:
+            off_x = int(offset_x)
+            off_y = int(offset_y)
+
+        for anim in self.animations:
+            for frame in anim.frames:
+                for layer in frame.layers:
+                    new_pixels: Dict[str, str] = {}
+                    for coord_str, hex_str in layer.pixels.items():
+                        parts = coord_str.split(",")
+                        if len(parts) == 2:
+                            px, py = int(parts[0]), int(parts[1])
+                            nx, ny = px + off_x, py + off_y
+                            if 0 <= nx < new_width and 0 <= ny < new_height:
+                                new_pixels[f"{nx},{ny}"] = hex_str
+                    layer.pixels = new_pixels
+
+        self.width = new_width
+        self.height = new_height
+
+    def crop_canvas(self, x: int, y: int, width: int, height: int) -> None:
+        """Crops canvas to bounding box (x, y, width, height)."""
+        self.resize_canvas(new_width=width, new_height=height, offset_x=-x, offset_y=-y)
+
+    def get_content_bbox(self) -> Optional[Tuple[int, int, int, int]]:
+        """Returns (x, y, width, height) bounding box of non-empty pixels across all layers/frames, or None if empty."""
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        found = False
+
+        for anim in self.animations:
+            for frame in anim.frames:
+                for layer in frame.layers:
+                    for coord_str in layer.pixels.keys():
+                        parts = coord_str.split(",")
+                        if len(parts) == 2:
+                            px, py = int(parts[0]), int(parts[1])
+                            if 0 <= px < self.width and 0 <= py < self.height:
+                                found = True
+                                if px < min_x:
+                                    min_x = px
+                                if px > max_x:
+                                    max_x = px
+                                if py < min_y:
+                                    min_y = py
+                                if py > max_y:
+                                    max_y = py
+
+        if not found:
+            return None
+        return (int(min_x), int(min_y), int(max_x - min_x + 1), int(max_y - min_y + 1))
+
+    def get_selection_bbox(self, selection_set) -> Optional[Tuple[int, int, int, int]]:
+        """Returns (x, y, width, height) bounding box of selection coordinates, or None if empty."""
+        if not selection_set:
+            return None
+        min_x = min(x for x, y in selection_set)
+        max_x = max(x for x, y in selection_set)
+        min_y = min(y for x, y in selection_set)
+        max_y = max(y for x, y in selection_set)
+        return (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+
     def to_dict(self) -> dict:
         """Serializes document data into dictionary format suitable for pycaml encoding."""
         return {
@@ -601,11 +710,22 @@ class PixelDocument:
         image = self.render_composite_qimage()
         return image.save(filepath, "PNG")
 
-    def import_image_as_layer(self, filepath: str, name: Optional[str] = None) -> Optional[Layer]:
+    def import_image_as_layer(
+        self,
+        filepath: str,
+        name: Optional[str] = None,
+        resize_canvas: bool = False,
+        scale_to_canvas: bool = False,
+    ) -> Optional[Layer]:
         """Imports an image file (PNG/JPG/BMP) as a new layer in the active frame."""
         image = QImage(filepath)
         if image.isNull():
             return None
+
+        if resize_canvas:
+            self.resize_canvas(image.width(), image.height(), anchor="top-left")
+        elif scale_to_canvas and (image.width() != self.width or image.height() != self.height):
+            image = image.scaled(self.width, self.height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
         if name is None:
             basename = os.path.basename(filepath)

@@ -4,7 +4,7 @@ Integrates dark theme, standard photo editor menu bar, tool toolbar, canvas view
 """
 
 import os
-from typing import Optional
+from typing import Optional, Tuple
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter
 from PySide6.QtWidgets import (
@@ -24,7 +24,7 @@ from coopixel.ui.animation_panel import AnimationPanel
 from coopixel.ui.appearance_panel import AppearancePanel
 from coopixel.ui.canvas import CanvasWidget
 from coopixel.ui.color_panel import ColorPanel
-from coopixel.ui.dialogs import AboutDialog, CanvasSizeDialog, NewCanvasDialog
+from coopixel.ui.dialogs import AboutDialog, CanvasSizeDialog, CropCanvasDialog, ImportImageDialog, NewCanvasDialog
 from coopixel.ui.layer_panel import LayerPanel
 from coopixel.ui.tag_panel import TagPanel
 from coopixel.ui.tool_panel import ToolPanel
@@ -39,7 +39,6 @@ class MainWindow(QMainWindow):
         # ---- Document & History ----
         self.doc: PixelDocument = PixelDocument(32, 32)
         self.history: HistoryStack = HistoryStack(max_depth=50)
-        self.history.push(self.doc.to_dict())   # Initial snapshot
 
         # ---- Canvas (Central Widget) ----
         self.canvas = CanvasWidget(self.doc)
@@ -63,6 +62,15 @@ class MainWindow(QMainWindow):
         self.tool_panel.tool_selected.connect(self.on_tool_selected)
         self.tool_panel.brush_size_changed.connect(self.on_brush_size_changed)
         self.tool_panel.shape_filled_changed.connect(self.on_shape_filled_changed)
+        self.tool_panel.crop_commit_requested.connect(self.on_crop_tool_commit_requested)
+        self.tool_panel.crop_cancel_requested.connect(self.on_crop_tool_cancel_requested)
+        self.tool_panel.crop_fit_sel_requested.connect(self.on_crop_tool_fit_sel_requested)
+        self.tool_panel.crop_fit_content_requested.connect(self.on_crop_tool_fit_content_requested)
+        self.tool_panel.selection_cleared.connect(self.on_selection_committed)
+        self.tool_panel.move_nudge_requested.connect(self.on_move_nudge_requested)
+
+        self.canvas.crop_committed.connect(self.on_crop_committed)
+        self.canvas.selection_committed.connect(self.on_selection_committed)
 
         # Set default tool to Pencil
         self.canvas.active_tool = self.tool_panel.tools["pencil"]
@@ -123,6 +131,7 @@ class MainWindow(QMainWindow):
         # ---- Menu Bar ----
         self._build_menu_bar()
         self.update_status_bar(0, 0)
+        self._push_history()
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -262,10 +271,6 @@ class MainWindow(QMainWindow):
         clear_layer_act.triggered.connect(self.on_clear_active_layer)
         edit_menu.addAction(clear_layer_act)
 
-        canvas_size_act = QAction("Canvas Size...", self)
-        canvas_size_act.triggered.connect(self.on_change_canvas_size)
-        edit_menu.addAction(canvas_size_act)
-
         edit_menu.addSeparator()
 
         sel_all_act = QAction("Select &All", self)
@@ -282,6 +287,63 @@ class MainWindow(QMainWindow):
         invert_sel_act.setShortcut(QKeySequence("Ctrl+I"))
         invert_sel_act.triggered.connect(self.on_invert_selection)
         edit_menu.addAction(invert_sel_act)
+
+        # ---- IMAGE ----
+        image_menu = menu_bar.addMenu("&Image")
+
+        img_canvas_size_act = QAction("Canvas Size...", self)
+        img_canvas_size_act.triggered.connect(self.on_change_canvas_size)
+        image_menu.addAction(img_canvas_size_act)
+
+        crop_tool_act = QAction("Crop Tool", self)
+        crop_tool_act.setShortcut(QKeySequence("K"))
+        crop_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("crop"))
+        self.addAction(crop_tool_act)
+
+        move_tool_act = QAction("Move Tool", self)
+        move_tool_act.setShortcut(QKeySequence("V"))
+        move_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("move"))
+        self.addAction(move_tool_act)
+
+        sel_tool_act = QAction("Selection Tool", self)
+        sel_tool_act.setShortcut(QKeySequence("S"))
+        sel_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("selection"))
+        self.addAction(sel_tool_act)
+
+        pencil_tool_act = QAction("Pencil Tool", self)
+        pencil_tool_act.setShortcut(QKeySequence("P"))
+        pencil_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pencil"))
+        self.addAction(pencil_tool_act)
+
+        eraser_tool_act = QAction("Eraser Tool", self)
+        eraser_tool_act.setShortcut(QKeySequence("E"))
+        eraser_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("eraser"))
+        self.addAction(eraser_tool_act)
+
+        picker_tool_act = QAction("Color Picker", self)
+        picker_tool_act.setShortcut(QKeySequence("I"))
+        picker_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("picker"))
+        self.addAction(picker_tool_act)
+
+        fill_tool_act = QAction("Bucket Fill Tool", self)
+        fill_tool_act.setShortcut(QKeySequence("F"))
+        fill_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("fill"))
+        self.addAction(fill_tool_act)
+
+        line_tool_act = QAction("Line Tool", self)
+        line_tool_act.setShortcut(QKeySequence("L"))
+        line_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("line"))
+        self.addAction(line_tool_act)
+
+        rect_tool_act = QAction("Rectangle Tool", self)
+        rect_tool_act.setShortcut(QKeySequence("R"))
+        rect_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("rectangle"))
+        self.addAction(rect_tool_act)
+
+        circle_tool_act = QAction("Circle Tool", self)
+        circle_tool_act.setShortcut(QKeySequence("C"))
+        circle_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("circle"))
+        self.addAction(circle_tool_act)
 
         # ---- VIEW ----
         view_menu = menu_bar.addMenu("&View")
@@ -394,11 +456,16 @@ class MainWindow(QMainWindow):
         self.canvas.update()
 
     def _push_history(self) -> None:
-        """Push the current document state to the history stack (history.push deep-copies it)."""
-        self.history.push(self.doc.to_dict())
+        """Push current document state and selection state to the history stack."""
+        doc_dict = self.doc.to_dict()
+        if hasattr(self, "canvas") and hasattr(self.canvas, "selection"):
+            doc_dict["selection"] = [list(pt) for pt in self.canvas.selection.selected]
+        else:
+            doc_dict["selection"] = []
+        self.history.push(doc_dict)
 
     def _restore_from_dict(self, state: dict) -> None:
-        """Restore document from a state dict and update all UI, preserving the current view."""
+        """Restore document and selection state from a state dict and update all UI, preserving current view."""
         filepath = self.doc.filepath
         # Save current view state before swapping the document
         saved_zoom = self.canvas.zoom_level
@@ -409,11 +476,23 @@ class MainWindow(QMainWindow):
         self.canvas.doc = self.doc
         self.canvas.zoom_level = saved_zoom
         self.canvas.pan_offset = saved_pan
+
+        if "selection" in state and isinstance(state["selection"], list):
+            sel_coords = state["selection"]
+            self.canvas.selection.replace({(pt[0], pt[1]) for pt in sel_coords})
+        else:
+            self.canvas.selection.clear()
+
         self.canvas.update()
         self.layer_panel.set_document(self.doc)
         self.appearance_panel.set_document(self.doc)
         self.animation_panel.set_document(self.doc)
         self.tag_panel.set_document(self.doc)
+
+    def on_selection_committed(self) -> None:
+        """Called when a selection is created, modified, or cleared — pushes history state."""
+        self._push_history()
+        self.canvas.update()
 
     # ------------------------------------------------------------------
     # Slots
@@ -509,27 +588,133 @@ class MainWindow(QMainWindow):
     def on_change_canvas_size(self) -> None:
         dlg = CanvasSizeDialog(self.doc.width, self.doc.height, self)
         if dlg.exec() == CanvasSizeDialog.Accepted:
-            nw, nh = dlg.get_values()
-            self.doc.width = nw
-            self.doc.height = nh
+            nw, nh, anchor = dlg.get_values()
+            off_x, off_y = self._get_anchor_offset(nw, nh, anchor)
+            self.doc.resize_canvas(nw, nh, anchor=anchor)
+
+            if not self.canvas.selection.is_empty():
+                new_sel = set()
+                for sx, sy in self.canvas.selection.selected:
+                    nx, ny = sx + off_x, sy + off_y
+                    if 0 <= nx < nw and 0 <= ny < nh:
+                        new_sel.add((nx, ny))
+                self.canvas.selection.selected = new_sel
+
             self._push_history()
             self.canvas.center_canvas()
             self.canvas.update()
+            self.status_bar.showMessage(f"Resized canvas to {nw}×{nh} px ({anchor})", 2000)
+
+    def _get_anchor_offset(self, new_width: int, new_height: int, anchor: str) -> Tuple[int, int]:
+        anchor = anchor.lower().strip()
+        if anchor == "top-center":
+            return (new_width - self.doc.width) // 2, 0
+        elif anchor == "top-right":
+            return new_width - self.doc.width, 0
+        elif anchor == "middle-left":
+            return 0, (new_height - self.doc.height) // 2
+        elif anchor == "center":
+            return (new_width - self.doc.width) // 2, (new_height - self.doc.height) // 2
+        elif anchor == "middle-right":
+            return new_width - self.doc.width, (new_height - self.doc.height) // 2
+        elif anchor == "bottom-left":
+            return 0, new_height - self.doc.height
+        elif anchor == "bottom-center":
+            return (new_width - self.doc.width) // 2, new_height - self.doc.height
+        elif anchor == "bottom-right":
+            return new_width - self.doc.width, new_height - self.doc.height
+        else:
+            return 0, 0
+
+    def on_crop_committed(self, x: int, y: int, w: int, h: int) -> None:
+        if w <= 0 or h <= 0:
+            return
+
+        self.doc.crop_canvas(x, y, w, h)
+        if not self.canvas.selection.is_empty():
+            new_sel = set()
+            for sx, sy in self.canvas.selection.selected:
+                nx, ny = sx - x, sy - y
+                if 0 <= nx < w and 0 <= ny < h:
+                    new_sel.add((nx, ny))
+            self.canvas.selection.selected = new_sel
+
+        crop_tool = getattr(self.tool_panel, "crop_tool", None)
+        if crop_tool:
+            crop_tool.clear_box()
+
+        self._push_history()
+        self.canvas.center_canvas()
+        self.canvas.update()
+        self.status_bar.showMessage(f"Cropped canvas to {w}×{h} px at ({x}, {y})", 2000)
+
+    def on_crop_tool_commit_requested(self) -> None:
+        crop_tool = getattr(self.tool_panel, "crop_tool", None)
+        if crop_tool and crop_tool.crop_box:
+            x, y, w, h = crop_tool.crop_box
+            self.on_crop_committed(x, y, w, h)
+        else:
+            content_bbox = self.doc.get_content_bbox()
+            if content_bbox:
+                x, y, w, h = content_bbox
+                self.on_crop_committed(x, y, w, h)
+            else:
+                self.status_bar.showMessage("Draw a crop box on the canvas first", 2000)
+
+    def on_crop_tool_cancel_requested(self) -> None:
+        crop_tool = getattr(self.tool_panel, "crop_tool", None)
+        if crop_tool:
+            crop_tool.clear_box()
+            self.canvas.update()
+            self.status_bar.showMessage("Cleared crop box", 1500)
+
+    def on_crop_tool_fit_sel_requested(self) -> None:
+        crop_tool = getattr(self.tool_panel, "crop_tool", None)
+        if crop_tool:
+            sel_bbox = self.doc.get_selection_bbox(self.canvas.selection.selected)
+            if sel_bbox:
+                x, y, w, h = sel_bbox
+                crop_tool.set_box(x, y, w, h)
+                self.canvas.update()
+                self.status_bar.showMessage(f"Set crop box to selection ({w}×{h} px)", 1500)
+            else:
+                self.status_bar.showMessage("No active selection", 1500)
+
+    def on_crop_tool_fit_content_requested(self) -> None:
+        crop_tool = getattr(self.tool_panel, "crop_tool", None)
+        if crop_tool:
+            content_bbox = self.doc.get_content_bbox()
+            if content_bbox:
+                x, y, w, h = content_bbox
+                crop_tool.set_box(x, y, w, h)
+                self.canvas.update()
+                self.status_bar.showMessage(f"Set crop box to content ({w}×{h} px)", 1500)
+            else:
+                self.status_bar.showMessage("No content found", 1500)
+
+    def on_move_nudge_requested(self, dx: int, dy: int) -> None:
+        move_tool = getattr(self.tool_panel, "move_tool", None)
+        if move_tool:
+            changed = move_tool.nudge(self.doc, dx, dy, selection=self.canvas.selection)
+            if changed:
+                self._push_history()
+                self.canvas.update()
+                self.status_bar.showMessage(f"Nudged layer by ({dx}, {dy})", 1500)
 
     # ---- Selection & Clipboard Actions ----
 
     def on_select_all(self) -> None:
         self.canvas.selection.select_all(self.doc)
-        self.canvas.update()
+        self.on_selection_committed()
         self.status_bar.showMessage("Selected entire canvas", 1500)
 
     def on_deselect(self) -> None:
         self.canvas.selection.clear()
-        self.canvas.update()
+        self.on_selection_committed()
 
     def on_invert_selection(self) -> None:
         self.canvas.selection.invert(self.doc)
-        self.canvas.update()
+        self.on_selection_committed()
 
     def on_copy(self) -> None:
         """Copies selected pixels (or active layer pixels) to clipboard."""
@@ -672,7 +857,8 @@ class MainWindow(QMainWindow):
                             bg_layer.set_pixel(x, y, "#000000FF")
 
             self.history.clear()
-            self.history.push(self.doc.to_dict())
+            self.canvas.selection.clear()
+            self._push_history()
             self.canvas.set_document(self.doc)
             self.layer_panel.set_document(self.doc)
             self.appearance_panel.set_document(self.doc)
@@ -689,7 +875,8 @@ class MainWindow(QMainWindow):
         try:
             self.doc = PixelDocument.load_from_pix(filepath)
             self.history.clear()
-            self.history.push(self.doc.to_dict())
+            self.canvas.selection.clear()
+            self._push_history()
             self.canvas.set_document(self.doc)
             self.layer_panel.set_document(self.doc)
             self.appearance_panel.set_document(self.doc)
@@ -737,19 +924,38 @@ class MainWindow(QMainWindow):
             self, "Import Image as Layer", "", "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
         )
         if filepath:
-            try:
-                layer = self.doc.import_image_as_layer(filepath)
-                if layer:
-                    self._push_history()
-                    self.canvas.update()
-                    self.layer_panel.refresh_list()
-                    self.appearance_panel.refresh_panel()
-                    self.animation_panel.refresh_timeline()
-                    self.status_bar.showMessage(f"Imported {os.path.basename(filepath)} as layer '{layer.name}'", 3000)
-                else:
-                    QMessageBox.warning(self, "Import Failed", "Could not load image file.")
-            except Exception as e:
-                QMessageBox.critical(self, "Import Error", f"Failed to import image:\n{e}")
+            img = QImage(filepath)
+            if img.isNull():
+                QMessageBox.warning(self, "Import Failed", "Could not load image file.")
+                return
+
+            dlg = ImportImageDialog(
+                filepath,
+                img_width=img.width(),
+                img_height=img.height(),
+                canvas_width=self.doc.width,
+                canvas_height=self.doc.height,
+                parent=self,
+            )
+            if dlg.exec() == ImportImageDialog.Accepted:
+                layer_name, resize_canvas, scale_to_canvas = dlg.get_values()
+                try:
+                    layer = self.doc.import_image_as_layer(
+                        filepath,
+                        name=layer_name,
+                        resize_canvas=resize_canvas,
+                        scale_to_canvas=scale_to_canvas,
+                    )
+                    if layer:
+                        self._push_history()
+                        self.canvas.center_canvas()
+                        self.canvas.update()
+                        self.layer_panel.refresh_list()
+                        self.appearance_panel.refresh_panel()
+                        self.animation_panel.refresh_timeline()
+                        self.status_bar.showMessage(f"Imported {os.path.basename(filepath)} as layer '{layer.name}'", 3000)
+                except Exception as e:
+                    QMessageBox.critical(self, "Import Error", f"Failed to import image:\n{e}")
 
     def on_file_export_png(self) -> None:
         filepath, _ = QFileDialog.getSaveFileName(

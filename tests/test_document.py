@@ -12,6 +12,7 @@ from coopixel.models.effects import StrokeEffect
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.drawing import BucketFillTool
 from coopixel.tools.selection import SelectionTool
+from coopixel.ui.dialogs import CanvasSizeDialog, CropCanvasDialog, ImportImageDialog
 from coopixel.ui.main_window import MainWindow
 
 
@@ -264,6 +265,205 @@ def test_add_and_delete_layer_effects():
 
     assert len(active.effects) == 0
     mw.close()
+
+
+def test_canvas_resize_and_crop():
+    doc = PixelDocument(10, 10)
+    layer = doc.active_layer
+    layer.set_pixel(2, 2, "#FF0000FF")
+    layer.set_pixel(8, 8, "#00FF00FF")
+
+    assert doc.get_content_bbox() == (2, 2, 7, 7)
+
+    # Test top-left resize
+    doc.resize_canvas(15, 15, anchor="top-left")
+    assert doc.width == 15
+    assert doc.height == 15
+    assert layer.get_pixel(2, 2) == "#FF0000FF"
+    assert layer.get_pixel(8, 8) == "#00FF00FF"
+
+    # Test center resize
+    doc.resize_canvas(20, 20, anchor="center")
+    # off_x = (20 - 15) // 2 = 2, off_y = 2
+    assert layer.get_pixel(4, 4) == "#FF0000FF"
+
+    # Test crop canvas
+    doc.crop_canvas(4, 4, 10, 10)
+    assert doc.width == 10
+    assert doc.height == 10
+    assert layer.get_pixel(0, 0) == "#FF0000FF"
+    # (8, 8) was at (10, 10) in 20x20 space, cropped to (6, 6) in 10x10 space
+    assert layer.get_pixel(6, 6) == "#00FF00FF"
+
+
+def test_crop_tool_interactive():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    mw.doc.active_layer.set_pixel(3, 3, "#FFFF00FF")
+    mw.doc.active_layer.set_pixel(4, 4, "#00FFFFFF")
+
+    # Select crop tool
+    mw.tool_panel.select_tool_by_key("crop")
+    assert mw.canvas.active_tool.name == "crop"
+
+    # Simulate mouse press & drag on canvas
+    crop_tool = mw.canvas.active_tool
+    crop_tool.mouse_press(mw.doc, 3, 3, "#000", "#000")
+    crop_tool.mouse_move(mw.doc, 4, 4, "#000", "#000")
+    crop_tool.mouse_release(mw.doc, 4, 4, "#000", "#000")
+
+    assert crop_tool.crop_box == (3, 3, 2, 2)
+
+    # Commit crop via MainWindow
+    mw.on_crop_tool_commit_requested()
+
+    assert mw.doc.width == 2
+    assert mw.doc.height == 2
+    assert mw.doc.active_layer.get_pixel(0, 0) == "#FFFF00FF"
+    assert mw.doc.active_layer.get_pixel(1, 1) == "#00FFFFFF"
+    mw.close()
+
+
+def test_dialogs_crop_and_resize():
+    app = QApplication.instance() or QApplication([])
+
+    # Test CanvasSizeDialog
+    resize_dlg = CanvasSizeDialog(32, 32)
+    resize_dlg.width_spin.setValue(64)
+    resize_dlg.height_spin.setValue(48)
+    resize_dlg._on_anchor_clicked(4)  # center
+    nw, nh, anchor = resize_dlg.get_values()
+    assert nw == 64
+    assert nh == 48
+    assert anchor == "center"
+    resize_dlg.close()
+
+    # Test CropCanvasDialog
+    crop_dlg = CropCanvasDialog(32, 32, selection_bbox=(4, 4, 16, 16), content_bbox=(2, 2, 20, 20))
+    crop_dlg._apply_selection_bbox()
+    x, y, w, h = crop_dlg.get_values()
+    assert (x, y, w, h) == (4, 4, 16, 16)
+
+    crop_dlg._apply_content_bbox()
+    x, y, w, h = crop_dlg.get_values()
+    assert (x, y, w, h) == (2, 2, 20, 20)
+    crop_dlg.close()
+
+
+def test_draw_tool_encompasses_shapes_and_pencil():
+    app = QApplication.instance() or QApplication([])
+    sel_tool = SelectionTool()
+    assert sel_tool.mode == SelectionTool.BOX
+
+    mw = MainWindow()
+    order = mw.tool_panel._tool_order
+    assert "draw" in order
+    assert order == ["crop", "move", "selection", "draw", "eraser", "picker", "fill"]
+
+    # Test sub-mode selection via select_tool_by_key
+    mw.tool_panel.select_tool_by_key("pencil")
+    assert mw.tool_panel.draw_tool.mode == "pencil"
+
+    mw.tool_panel.select_tool_by_key("line")
+    assert mw.tool_panel.draw_tool.mode == "line"
+
+    mw.tool_panel.select_tool_by_key("rectangle")
+    assert mw.tool_panel.draw_tool.mode == "rectangle"
+
+    mw.tool_panel.select_tool_by_key("circle")
+    assert mw.tool_panel.draw_tool.mode == "circle"
+
+    mw.close()
+
+
+def test_selection_undo_redo():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+
+    assert mw.canvas.selection.is_empty()
+
+    # Step 1: Create a selection
+    mw.canvas.selection.replace([(2, 2), (2, 3), (3, 2), (3, 3)])
+    mw.on_selection_committed()
+    assert len(mw.canvas.selection.selected) == 4
+
+    # Step 2: Undo selection -> should revert to empty
+    mw.on_undo()
+    assert mw.canvas.selection.is_empty()
+
+    # Step 3: Redo selection -> should restore 4 points
+    mw.on_redo()
+    assert len(mw.canvas.selection.selected) == 4
+
+    # Step 4: Deselect (clear selection)
+    mw.on_deselect()
+    assert mw.canvas.selection.is_empty()
+
+    # Step 5: Undo deselect -> should restore selection
+    mw.on_undo()
+    assert len(mw.canvas.selection.selected) == 4
+
+    mw.close()
+
+
+def test_move_tool_interactive():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+
+    # Draw pixel at (5, 5)
+    mw.doc.active_layer.set_pixel(5, 5, "#FF0000FF")
+    mw.on_stroke_committed()
+    assert mw.doc.active_layer.get_pixel(5, 5) == "#FF0000FF"
+
+    # Select Move Tool
+    mw.tool_panel.select_tool_by_key("move")
+    assert mw.canvas.active_tool.name == "move"
+
+    # Drag pixel from (5, 5) to (7, 8)
+    move_tool = mw.canvas.active_tool
+    move_tool.mouse_press(mw.doc, 5, 5, "#000", "#000", selection=mw.canvas.selection)
+    move_tool.mouse_move(mw.doc, 7, 8, "#000", "#000", selection=mw.canvas.selection)
+    move_tool.mouse_release(mw.doc, 7, 8, "#000", "#000", selection=mw.canvas.selection)
+
+    assert mw.doc.active_layer.get_pixel(5, 5) is None
+    assert mw.doc.active_layer.get_pixel(7, 8) == "#FF0000FF"
+
+    # Test nudge
+    mw.on_move_nudge_requested(-1, -1)
+    assert mw.doc.active_layer.get_pixel(7, 8) is None
+    assert mw.doc.active_layer.get_pixel(6, 7) == "#FF0000FF"
+
+    mw.close()
+
+
+def test_import_image_dialog_and_canvas_resize(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    doc = PixelDocument(16, 16)
+    assert doc.width == 16 and doc.height == 16
+
+    # Create a 64x48 test image file
+    img_path = str(tmp_path / "test_img.png")
+    test_img = QImage(64, 48, QImage.Format_ARGB32)
+    test_img.fill(QColor(0, 255, 0, 255))
+    test_img.save(img_path)
+
+    # Test dialog instantiation and default checkbox state for different size image
+    dlg = ImportImageDialog(img_path, img_width=64, img_height=48, canvas_width=16, canvas_height=16)
+    name, resize_canvas, scale_to_canvas = dlg.get_values()
+    assert name == "test_img"
+    assert resize_canvas is True
+    assert scale_to_canvas is False
+    dlg.close()
+
+    # Test doc.import_image_as_layer with resize_canvas=True
+    layer = doc.import_image_as_layer(img_path, name="ResizedLayer", resize_canvas=True)
+    assert layer is not None
+    assert doc.width == 64
+    assert doc.height == 48
+    assert layer.get_pixel(0, 0) == "#00FF00FF"
+
+
+
 
 
 

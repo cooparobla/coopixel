@@ -59,7 +59,7 @@ class SelectionTool(Tool):
     def __init__(self, selection: Optional[SelectionModel] = None):
         super().__init__()
         self.selection: SelectionModel = selection if selection is not None else SelectionModel()
-        self.mode: str = self.DRAW
+        self.mode: str = self.BOX
         # Drag start for box/circle
         self._drag_start: Optional[Tuple[int, int]] = None
         # Whether to ADD to or REPLACE selection (Shift = add, Alt = remove)

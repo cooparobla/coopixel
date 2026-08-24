@@ -187,3 +187,90 @@ class BucketFillTool(Tool):
                 changed = True
 
         return changed
+
+
+class DrawTool(Tool):
+    """Unified drawing tool encompassing Pencil, Line, Rectangle, and Circle modes."""
+
+    name = "draw"
+    display_name = "Draw Tool"
+
+    PENCIL = "pencil"
+    LINE = "line"
+    RECTANGLE = "rectangle"
+    CIRCLE = "circle"
+
+    def __init__(self):
+        super().__init__()
+        from coopixel.tools.shapes import CircleTool, LineTool, RectangleTool
+
+        self.mode: str = self.PENCIL
+        self.pencil_tool = PencilTool()
+        self.line_tool = LineTool()
+        self.rect_tool = RectangleTool()
+        self.circle_tool = CircleTool()
+
+    @property
+    def active_sub_tool(self) -> Tool:
+        if self.mode == self.LINE:
+            return self.line_tool
+        elif self.mode == self.RECTANGLE:
+            return self.rect_tool
+        elif self.mode == self.CIRCLE:
+            return self.circle_tool
+        return self.pencil_tool
+
+    def mouse_press(
+        self,
+        doc: PixelDocument,
+        x: int,
+        y: int,
+        primary_color: str,
+        secondary_color: str,
+        size: int = 1,
+        filled: bool = False,
+        selection=None,
+    ) -> bool:
+        self.is_drawing = True
+        return self.active_sub_tool.mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+
+    def mouse_move(
+        self,
+        doc: PixelDocument,
+        x: int,
+        y: int,
+        primary_color: str,
+        secondary_color: str,
+        size: int = 1,
+        filled: bool = False,
+        selection=None,
+    ) -> bool:
+        return self.active_sub_tool.mouse_move(doc, x, y, primary_color, secondary_color, size, filled, selection)
+
+    def mouse_release(
+        self,
+        doc: PixelDocument,
+        x: int,
+        y: int,
+        primary_color: str,
+        secondary_color: str,
+        size: int = 1,
+        filled: bool = False,
+        selection=None,
+    ) -> bool:
+        self.is_drawing = False
+        return self.active_sub_tool.mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection)
+
+    def get_preview_pixels(
+        self,
+        doc: PixelDocument,
+        x: int,
+        y: int,
+        primary_color: str,
+        size: int = 1,
+        filled: bool = False,
+        selection=None,
+    ) -> Dict[Tuple[int, int], str]:
+        if hasattr(self.active_sub_tool, "get_preview_pixels"):
+            return self.active_sub_tool.get_preview_pixels(doc, x, y, primary_color, size, filled, selection)
+        return {}
