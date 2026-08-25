@@ -395,15 +395,18 @@ class PixelDocument:
             return self.paths[self.active_path_index]
         return None
 
-    def add_path(self, name: Optional[str] = None, layer_id: str = "") -> VectorPath:
+    def add_path(self, name: Optional[str] = None, layer_id: str = "", frame_index: Optional[int] = None) -> VectorPath:
         if name is None:
             name = f"Path {len(self.paths) + 1}"
         if not layer_id and self.active_layer:
             layer_id = self.active_layer.name
-        vp = VectorPath(name=name, layer_id=layer_id)
+        if frame_index is None:
+            frame_index = getattr(self, "active_frame_index", 0)
+        vp = VectorPath(name=name, layer_id=layer_id, frame_index=frame_index)
         self.paths.append(vp)
         self.active_path_index = len(self.paths) - 1
         return vp
+
 
     def remove_path(self, index: int) -> bool:
         if 0 <= index < len(self.paths):
@@ -814,11 +817,29 @@ class PixelDocument:
 
         painter = QPainter(image)
         for layer in target_frame.layers:
-            if not layer.visible or layer.opacity <= 0 or not layer.pixels:
+            if not layer.visible or layer.opacity <= 0:
+                continue
+
+            base_pixels = dict(layer.pixels)
+
+            # Composite dynamic vector path pixels bound to this layer and frame
+            for path in self.paths:
+                if not path.visible or not path.anchors:
+                    continue
+                if path.layer_id and path.layer_id != layer.name:
+                    continue
+                if path.frame_index is not None and path.frame_index != frame_index:
+                    continue
+                if path.stroked or path.filled:
+                    path_px = path.get_pixel_map(w, h)
+                    if path_px:
+                        base_pixels.update(path_px)
+
+
+            if not base_pixels:
                 continue
 
             # Compute layer effects if present
-            base_pixels = dict(layer.pixels)
             below_map: Dict[str, str] = {}
             above_map: Dict[str, str] = {}
             for eff in layer.effects:
@@ -828,6 +849,7 @@ class PixelDocument:
                     b_dict, a_dict = eff.render_effect(base_pixels, w, h)
                     below_map.update(b_dict)
                     above_map.update(a_dict)
+
 
             # Build layer buffer for fast rendering — write directly into a bytearray
             # instead of calling setPixelColor() per pixel (O(n) Qt→Python overhead).

@@ -39,7 +39,9 @@ class Tool:
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        shift_pressed: bool = False,
     ) -> bool:
+
         """Called when mouse press occurs on canvas. Returns True if document was modified."""
         self.is_drawing = True
         self.start_x = x

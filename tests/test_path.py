@@ -1,5 +1,5 @@
 """
-Unit tests for Vector Paths, Bezier curves, Pen Tool, and Paths Panel in Coopixel.
+Unit tests for Vector Paths, Bezier curves, Pen Tool, dynamic stroke/fill, and Paths Panel in Coopixel.
 """
 
 from PySide6.QtCore import QPointF
@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication
 from coopixel.models.document import PixelDocument
 from coopixel.models.path import AnchorPoint, VectorPath
 from coopixel.tools.pen import PenTool
-from coopixel.ui.path_panel import PathPanel
+from coopixel.ui.path_panel import PathPanel, PathItemWidget
 
 
 def test_anchor_point_and_handles():
@@ -29,11 +29,14 @@ def test_anchor_point_and_handles():
     assert restored.handle_out_x == 5.0
 
 
-def test_vector_path_qpainterpath_generation():
-    vp = VectorPath("Test Path", layer_id="Background", closed=True)
+def test_vector_path_dynamic_stroke_and_fill_properties():
+    vp = VectorPath("Test Path", layer_id="Background", closed=True, stroked=True, filled=True)
     vp.add_anchor(AnchorPoint(5, 5, 0, 0, 2, 0))
     vp.add_anchor(AnchorPoint(15, 5, -2, 0, 0, 2))
     vp.add_anchor(AnchorPoint(15, 15, 0, -2, 0, 0))
+
+    assert vp.stroked is True
+    assert vp.filled is True
 
     qpath = vp.to_qpainterpath()
     assert not qpath.isEmpty()
@@ -47,11 +50,15 @@ def test_vector_path_qpainterpath_generation():
     serialized = doc.to_dict()
     assert len(serialized["paths"]) == 1
     assert serialized["paths"][0]["name"] == "Test Path"
+    assert serialized["paths"][0]["stroked"] is True
+    assert serialized["paths"][0]["filled"] is True
 
     restored_doc = PixelDocument.from_dict(serialized)
     assert len(restored_doc.paths) == 1
     assert restored_doc.paths[0].name == "Test Path"
     assert restored_doc.paths[0].closed is True
+    assert restored_doc.paths[0].stroked is True
+    assert restored_doc.paths[0].filled is True
 
 
 def test_path_stroke_and_fill_rasterization():
@@ -93,6 +100,22 @@ def test_pen_tool_mouse_interaction():
     assert len(doc.active_path.anchors) == 2
     assert doc.active_path.anchors[1].handle_out_x != 0.0
 
+    # Normal Click & Drag node 0: moves node position
+    pen.mouse_press(doc, 5, 5, "#FF0000FF", "#000000FF", shift_pressed=False)
+    pen.mouse_move(doc, 7, 8, "#FF0000FF", "#000000FF")
+    pen.mouse_release(doc, 7, 8, "#FF0000FF", "#000000FF")
+    assert doc.active_path.anchors[0].x == 7.0
+    assert doc.active_path.anchors[0].y == 8.0
+
+    # Shift-Click & Drag node 0: alters Bezier curve factor (handles)
+    pen.mouse_press(doc, 7, 8, "#FF0000FF", "#000000FF", shift_pressed=True)
+    pen.mouse_move(doc, 10, 10, "#FF0000FF", "#000000FF")
+    pen.mouse_release(doc, 10, 10, "#FF0000FF", "#000000FF")
+    assert doc.active_path.anchors[0].handle_in_x == 3.0
+    assert doc.active_path.anchors[0].handle_in_y == 2.0
+
+
+
 
 def test_path_panel_ui():
     app = QApplication.instance() or QApplication([])
@@ -101,7 +124,15 @@ def test_path_panel_ui():
     panel = PathPanel(doc)
 
     assert panel.list_widget.count() == 1
-    assert "Path Alpha" in panel.list_widget.item(0).text()
+
+    # Test PathItemWidget dynamic stroke/fill toggle buttons
+    item_widget = panel.list_widget.itemWidget(panel.list_widget.item(0))
+    assert isinstance(item_widget, PathItemWidget)
+    assert item_widget.stroke_btn.isChecked() is True
+    assert item_widget.fill_btn.isChecked() is False
+
+    item_widget.fill_btn.setChecked(True)
+    assert doc.paths[0].filled is True
 
     panel.on_add_path()
     assert panel.list_widget.count() == 2
@@ -112,3 +143,41 @@ def test_path_panel_ui():
     assert len(doc.paths) == 1
 
     panel.close()
+
+
+def test_move_tool_path_translation_when_paths_panel_open():
+    from coopixel.tools.move import MoveTool
+
+    doc = PixelDocument(32, 32)
+    doc.active_layer.set_pixel(0, 0, "#FF0000FF")
+    doc.active_layer.set_pixel(1, 0, "#FF0000FF")
+    doc.active_layer.set_pixel(0, 1, "#FF0000FF")
+
+    path = doc.add_path("Move Test Path")
+    path.add_anchor(AnchorPoint(10.0, 10.0))
+    path.add_anchor(AnchorPoint(20.0, 20.0))
+
+    move_tool = MoveTool()
+
+    # 1. When path_panel_open is False: MoveTool moves layer pixels, NOT path
+    move_tool.mouse_press(doc, 0, 0, "#FF0000FF", "#000000FF", path_panel_open=False)
+    move_tool.mouse_move(doc, 3, 3, "#FF0000FF", "#000000FF", path_panel_open=False)
+    move_tool.mouse_release(doc, 3, 3, "#FF0000FF", "#000000FF")
+
+    assert path.anchors[0].x == 10.0  # Path did NOT move
+    assert doc.active_layer.pixels.get("3,3") == "#FF0000FF"  # Layer pixels moved (dx=+3, dy=+3)
+
+    # 2. When path_panel_open is True: MoveTool moves active vector path, NOT layer
+    doc.active_layer.pixels = {"0,0": "#FF0000FF"}
+
+    move_tool.mouse_press(doc, 10, 10, "#FF0000FF", "#000000FF", path_panel_open=True)
+    move_tool.mouse_move(doc, 15, 12, "#FF0000FF", "#000000FF", path_panel_open=True)
+    move_tool.mouse_release(doc, 15, 12, "#FF0000FF", "#000000FF")
+
+    assert path.anchors[0].x == 15.0  # Path shifted dx=+5, dy=+2
+    assert path.anchors[0].y == 12.0
+    assert path.anchors[1].x == 25.0
+    assert path.anchors[1].y == 22.0
+    assert doc.active_layer.pixels.get("0,0") == "#FF0000FF"  # Layer pixels did NOT move!
+
+

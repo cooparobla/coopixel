@@ -65,6 +65,7 @@ class PenTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        shift_pressed: bool = False,
     ) -> bool:
         self.is_drawing = True
         self.start_x = x
@@ -89,13 +90,19 @@ class PenTool(Tool):
                 path.closed = True
                 self.selected_anchor_idx = 0
                 self.selected_handle = "anchor"
+                self.is_dragging_handle = False
                 return True
 
             self.selected_anchor_idx = target_idx
             self.selected_handle = target_type
             if target_type == "anchor":
-                self.is_dragging_handle = True
+                # Shift-click alters Bezier curve handles; normal click moves node position
+                if shift_pressed:
+                    self.is_dragging_handle = True
+                else:
+                    self.is_dragging_handle = False
             return True
+
 
         # Clicked empty space -> Add new anchor point
         new_anchor = AnchorPoint(fx, fy)

@@ -6,6 +6,7 @@ Handles zooming, panning, grid rendering, checkerboard background, tool interact
 from typing import Dict, Optional, Set, Tuple
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal, QTimer
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QFont,
     QImage,
@@ -16,6 +17,7 @@ from PySide6.QtGui import (
     QTransform,
     QWheelEvent,
 )
+
 from PySide6.QtWidgets import QWidget
 from coopixel.models.document import PixelDocument, hex_to_qcolor
 from coopixel.models.selection import SelectionModel
@@ -37,6 +39,8 @@ class CanvasWidget(QWidget):
     crop_committed = Signal(int, int, int, int)
     # Emitted whenever the crop box changes (drag live update) — carries (x, y, w, h)
     crop_box_changed = Signal(int, int, int, int)
+    # Emitted when a vector path is created or modified
+    path_modified = Signal()
     # Emitted when a selection is created, modified, or cleared via canvas interaction
     selection_committed = Signal()
 
@@ -456,20 +460,38 @@ class CanvasWidget(QWidget):
                 painter.drawLine(QPointF(ox + (px + 1) * z, oy + py * z), QPointF(ox + (px + 1) * z, oy + (py + 1) * z))
 
     def _draw_vector_paths(self, painter: QPainter) -> None:
-        """Renders vector path Bezier curves, anchor points, and control handles."""
+        """Renders vector path Bezier curves, dynamic stroke/fill, and active selection wireframe overlays."""
         if not self.doc.paths:
             return
 
         is_pen_active = isinstance(self.active_tool, PenTool)
+        parent_window = self.window()
+        path_panel = getattr(parent_window, "path_panel", None)
+        is_panel_visible = path_panel.isVisible() if path_panel is not None else False
+
+        # When the paths panel is minimized and Pen Tool is not active, do NOT render paths on canvas
+        if not is_panel_visible and not is_pen_active:
+            return
+
         z = self.zoom_level
         ox = self.pan_offset.x()
         oy = self.pan_offset.y()
+
+        active_layer_name = self.doc.active_layer.name if self.doc.active_layer else ""
+        active_frame_idx = getattr(self.doc, "active_frame_index", 0)
+        active_path_idx = self.doc.active_path_index
 
         for idx, path in enumerate(self.doc.paths):
             if not path.visible or not path.anchors:
                 continue
 
-            is_active_path = (idx == self.doc.active_path_index)
+            # Only show paths on the current layer and current frame
+            if path.layer_id and path.layer_id != active_layer_name:
+                continue
+            if path.frame_index is not None and path.frame_index != active_frame_idx:
+                continue
+
+            is_active_path = (idx == active_path_idx)
 
             # Build screen-transformed QPainterPath
             qpath = path.to_qpainterpath()
@@ -478,19 +500,15 @@ class CanvasWidget(QWidget):
             transform.scale(z, z)
             screen_path = transform.map(qpath)
 
-            # Draw Bezier curve line
-            if is_active_path:
-                pen = QPen(QColor("#F97316"), 2.0)  # Bright Orange for active path
-            else:
-                pen = QPen(QColor(56, 189, 248, 180), 1.5, Qt.DashLine)  # Cyan for other paths
+            # Selected Path Wireframe & Control Handles (Visualized ONLY for active path when Pen Tool or Paths Panel is open)
+            if is_active_path and (is_pen_active or is_panel_visible):
+                wire_pen = QPen(QColor("#F97316"), 2.0)  # Prominent bright orange wireframe for selected path
+                painter.setPen(wire_pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPath(screen_path)
 
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(screen_path)
-
-            # Draw Anchor Points & Handles if path is active or Pen Tool is active
-            if is_active_path or is_pen_active:
                 selected_idx = getattr(self.active_tool, "selected_anchor_idx", None) if is_pen_active else None
+
 
                 for a_idx, anchor in enumerate(path.anchors):
                     ax_screen = ox + anchor.x * z
@@ -528,6 +546,7 @@ class CanvasWidget(QWidget):
     # ------------------------------------------------------------------
 
 
+
     def _is_selection_tool(self) -> bool:
         return isinstance(self.active_tool, SelectionTool)
 
@@ -559,6 +578,10 @@ class CanvasWidget(QWidget):
                 else:
                     sel_tool._op = "replace"
 
+            parent_window = self.window()
+            path_panel = getattr(parent_window, "path_panel", None)
+            is_path_panel_open = path_panel.isVisible() if path_panel is not None else False
+
             if isinstance(self.active_tool, MoveTool):
                 changed = self.active_tool.mouse_press(
                     self.doc,
@@ -572,15 +595,28 @@ class CanvasWidget(QWidget):
                     screen_pos=event.position(),
                     pan_offset=self.pan_offset,
                     zoom=self.zoom_level,
+                    path_panel_open=is_path_panel_open,
                 )
             else:
                 changed = self.active_tool.mouse_press(
-                    self.doc, px, py, self.primary_color, self.secondary_color, self.brush_size, self.shape_filled, self.selection
+                    self.doc,
+                    px,
+                    py,
+                    self.primary_color,
+                    self.secondary_color,
+                    self.brush_size,
+                    self.shape_filled,
+                    self.selection,
+                    shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
                 )
+
             if changed:
                 self._stroke_dirty = True
                 self.canvas_updated.emit()
+                if isinstance(self.active_tool, (PenTool, MoveTool)):
+                    self.path_modified.emit()
             elif self._is_selection_tool():
+
                 # Selection changes don't dirty the document but need a repaint
                 self.update()
             if isinstance(self.active_tool, CropTool) and self.active_tool.crop_box:
@@ -622,13 +658,34 @@ class CanvasWidget(QWidget):
             if isinstance(self.active_tool, (CropTool, MoveTool)):
                 self.active_tool.constrain_square = bool(event.modifiers() & Qt.ShiftModifier)
 
-            changed = self.active_tool.mouse_move(
-                self.doc, px, py, self.primary_color, self.secondary_color, self.brush_size, self.shape_filled, self.selection
-            )
+            parent_window = self.window()
+            path_panel = getattr(parent_window, "path_panel", None)
+            is_path_panel_open = path_panel.isVisible() if path_panel is not None else False
+
+            if isinstance(self.active_tool, MoveTool):
+                changed = self.active_tool.mouse_move(
+                    self.doc,
+                    px,
+                    py,
+                    self.primary_color,
+                    self.secondary_color,
+                    self.brush_size,
+                    self.shape_filled,
+                    self.selection,
+                    path_panel_open=is_path_panel_open,
+                )
+            else:
+                changed = self.active_tool.mouse_move(
+                    self.doc, px, py, self.primary_color, self.secondary_color, self.brush_size, self.shape_filled, self.selection
+                )
+
             if changed:
                 self._stroke_dirty = True
                 self.invalidate_cache()
                 self.canvas_updated.emit()
+                if isinstance(self.active_tool, (PenTool, MoveTool)):
+                    self.path_modified.emit()
+
             elif self._is_selection_tool():
                 self.update()  # Repaint for rubber-band preview
 
@@ -656,6 +713,10 @@ class CanvasWidget(QWidget):
             )
             if changed:
                 self._stroke_dirty = True
+
+            if isinstance(self.active_tool, PenTool):
+                self.path_modified.emit()
+
 
             # Commit full stroke to history only on mouse_release
             if self._stroke_dirty:

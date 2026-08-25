@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         self.canvas.crop_box_changed.connect(self.tool_panel.update_crop_box_ui)
         self.canvas.selection_committed.connect(self.on_selection_committed)
 
+
         # Set default tool to Pencil
         self.canvas.active_tool = self.tool_panel.tools["pencil"]
 
@@ -132,8 +133,10 @@ class MainWindow(QMainWindow):
         self.path_panel = PathPanel(self.doc, self)
         self.path_panel.path_changed.connect(self.on_path_changed)
         self.path_panel.path_selected.connect(self.on_path_selected)
+        self.canvas.path_modified.connect(self.path_panel.refresh_panel)
         self.addDockWidget(Qt.RightDockWidgetArea, self.path_panel)
         self.path_panel.hide()
+
 
 
         # Connect tool panel pen action signals to path panel
@@ -795,8 +798,9 @@ class MainWindow(QMainWindow):
 
     def on_path_selected(self, path_idx: int) -> None:
         """Called when user selects a path in the Paths panel."""
-        self.layer_panel.refresh_panel()
+        self.layer_panel.refresh_list()
         self.canvas.update()
+
 
 
     def on_layer_aligned(self, desc: str) -> None:
@@ -859,12 +863,14 @@ class MainWindow(QMainWindow):
         self.canvas.update()
 
     def on_active_frame_changed(self) -> None:
-        """Called when active frame is changed — updates layer panel, appearance panel & canvas."""
+        """Called when active frame is changed — updates layer panel, appearance panel, path panel & canvas."""
         self.canvas.invalidate_cache()
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
         self.tag_panel.refresh_tags()
+        self.path_panel.refresh_panel()
         self.canvas.update()
+
 
     def on_undo(self) -> None:
         prev_state = self.history.undo()
@@ -1097,11 +1103,14 @@ class MainWindow(QMainWindow):
     def on_move_nudge_requested(self, dx: int, dy: int) -> None:
         move_tool = getattr(self.tool_panel, "move_tool", None)
         if move_tool:
-            changed = move_tool.nudge(self.doc, dx, dy, selection=self.canvas.selection)
+            is_open = self.path_panel.isVisible() if hasattr(self, "path_panel") else False
+            changed = move_tool.nudge(self.doc, dx, dy, selection=self.canvas.selection, path_panel_open=is_open)
             if changed:
                 self._push_history()
                 self.canvas.update()
-                self.status_bar.showMessage(f"Nudged layer by ({dx}, {dy})", 1500)
+                target_name = "path" if is_open and self.doc.active_path else "layer"
+                self.status_bar.showMessage(f"Nudged {target_name} by ({dx}, {dy})", 1500)
+
 
     # ---- Selection & Clipboard Actions ----
 
