@@ -133,7 +133,8 @@ class MainWindow(QMainWindow):
         self.path_panel.path_changed.connect(self.on_path_changed)
         self.path_panel.path_selected.connect(self.on_path_selected)
         self.addDockWidget(Qt.RightDockWidgetArea, self.path_panel)
-        self.path_panel.show()
+        self.path_panel.hide()
+
 
         # Connect tool panel pen action signals to path panel
         self.tool_panel.pen_stroke_requested.connect(self.path_panel.on_stroke_path)
@@ -204,6 +205,13 @@ class MainWindow(QMainWindow):
             "QToolButton:checked { background: #2E2620; border-color: #F97316; color: #F97316; }"
         )
 
+        path_act = QAction("🖋️", self)
+        path_act.setToolTip("Vector Paths Panel")
+        path_act.setCheckable(True)
+        path_act.setChecked(self.path_panel.isVisible())
+        path_act.toggled.connect(self.path_panel.setVisible)
+        self.path_panel.visibilityChanged.connect(path_act.setChecked)
+
         align_act = QAction("📐", self)
         align_act.setToolTip("Align Layer to Canvas")
         align_act.setCheckable(True)
@@ -239,12 +247,14 @@ class MainWindow(QMainWindow):
         anim_act.toggled.connect(self.animation_panel.setVisible)
         self.animation_panel.visibilityChanged.connect(anim_act.setChecked)
 
+        right_tb.addAction(path_act)
         right_tb.addAction(align_act)
         right_tb.addAction(app_act)
         right_tb.addAction(tag_act)
         right_tb.addAction(actions_act)
         right_tb.addAction(anim_act)
         self.addToolBar(Qt.RightToolBarArea, right_tb)
+
 
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
@@ -872,7 +882,11 @@ class MainWindow(QMainWindow):
 
     def on_tool_selected(self, tool) -> None:
         self.canvas.active_tool = tool
+        if getattr(tool, "name", "") == "pen":
+            if not self.path_panel.isVisible():
+                self.path_panel.show()
         self.canvas.update()
+
 
     def on_brush_size_changed(self, size: int) -> None:
         self.canvas.brush_size = size
