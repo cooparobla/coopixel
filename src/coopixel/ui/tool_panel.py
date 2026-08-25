@@ -21,6 +21,7 @@ from coopixel.tools.base import Tool
 from coopixel.tools.crop import CropTool
 from coopixel.tools.drawing import BucketFillTool, DrawTool, EraserTool, PencilTool
 from coopixel.tools.move import MoveTool
+from coopixel.tools.pen import PenTool
 from coopixel.tools.picker import ColorPickerTool
 from coopixel.tools.selection import SelectionTool
 from coopixel.tools.shapes import CircleTool, LineTool, RectangleTool
@@ -58,6 +59,9 @@ class ToolPanel(QFrame):
     crop_wh_changed = Signal(int, int)
     selection_cleared = Signal()
     move_nudge_requested = Signal(int, int)
+    pen_stroke_requested = Signal()
+    pen_fill_requested = Signal()
+    pen_new_path_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -79,6 +83,7 @@ class ToolPanel(QFrame):
         self.crop_tool = CropTool()
         self.move_tool = MoveTool()
         self.draw_tool = DrawTool()
+        self.pen_tool = PenTool()
 
         self.tools: Dict[str, Tool] = {
             "crop": self.crop_tool,
@@ -89,17 +94,20 @@ class ToolPanel(QFrame):
             "eraser": EraserTool(),
             "picker": ColorPickerTool(),
             "fill": self.fill_tool,
+            "pen": self.pen_tool,
         }
 
         tool_defs = [
             ("move",      "🖐️", "Move Tool (V)"),
             ("selection", "🔲", "Selection Tool (S)"),
             ("draw",      "✏️", "Draw Tool (P)"),
+            ("pen",       "🖋️", "Pen Tool (N): Vector paths & Bezier curves"),
             ("eraser",    "🧹", "Eraser Tool (E)"),
             ("picker",    "🧪", "Color Picker (I)"),
             ("fill",      "🪣", "Bucket Fill Tool (F)"),
             ("crop",      "✂️", "Crop Tool (K)"),
         ]
+
         self._tool_order = [k for k, _, _ in tool_defs]
 
         for tool_key, icon, tip in tool_defs:
@@ -397,9 +405,42 @@ class ToolPanel(QFrame):
                 btns[idx].setChecked(True)
         self._on_tool_clicked(tool, actual_key)
 
-    # ------------------------------------------------------------------
-    # Internal slots
-    # ------------------------------------------------------------------
+        # Page 5 — Pen Tool Modes
+        pen_widget = QWidget()
+        pen_layout = QHBoxLayout(pen_widget)
+        pen_layout.setContentsMargins(0, 0, 0, 0)
+        pen_layout.setSpacing(4)
+        pen_lbl = QLabel("Pen Tool:")
+        pen_lbl.setStyleSheet("color: #94A3B8; font-weight: 500;")
+        pen_layout.addWidget(pen_lbl)
+
+        btn_new_p = QToolButton()
+        btn_new_p.setText("+ New Path")
+        btn_new_p.setToolTip("Create new vector path")
+        btn_new_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
+        btn_new_p.clicked.connect(self.pen_new_path_requested.emit)
+
+        btn_stroke_p = QToolButton()
+        btn_stroke_p.setText("🖌️ Stroke Path")
+        btn_stroke_p.setToolTip("Rasterize active path outline onto active layer")
+        btn_stroke_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
+        btn_stroke_p.clicked.connect(self.pen_stroke_requested.emit)
+
+        btn_fill_p = QToolButton()
+        btn_fill_p.setText("🎨 Fill Path")
+        btn_fill_p.setToolTip("Rasterize active path interior onto active layer")
+        btn_fill_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
+        btn_fill_p.clicked.connect(self.pen_fill_requested.emit)
+
+        pen_layout.addWidget(btn_new_p)
+        pen_layout.addWidget(btn_stroke_p)
+        pen_layout.addWidget(btn_fill_p)
+        pen_layout.addStretch(1)
+        self.ctx_stack.addWidget(pen_widget)
+
+        # Page 6 — Empty spacer for tools with no extra context options
+        self.ctx_stack.addWidget(QWidget())
+        main_layout.addWidget(self.ctx_stack, stretch=1)
 
     def _on_tool_clicked(self, tool: Tool, key: str) -> None:
         if key in ("draw", "pencil"):
@@ -412,9 +453,12 @@ class ToolPanel(QFrame):
             self.ctx_stack.setCurrentIndex(3)
         elif key == "move":
             self.ctx_stack.setCurrentIndex(4)
-        else:
+        elif key == "pen":
             self.ctx_stack.setCurrentIndex(5)
+        else:
+            self.ctx_stack.setCurrentIndex(6)
         self.tool_selected.emit(tool)
+
 
     def _on_draw_mode(self, mode: str) -> None:
         self.draw_tool.mode = mode

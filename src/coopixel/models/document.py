@@ -6,9 +6,11 @@ Supports extensible layer effects (e.g. Stroke).
 
 import os
 from typing import Dict, List, Optional, Tuple
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from pycaml import CAMLMap
 from coopixel.models.effects import LayerEffect, effect_from_dict
+from coopixel.models.path import AnchorPoint, VectorPath
+
 
 
 _COLOR_CACHE: Dict[str, QColor] = {}
@@ -381,9 +383,91 @@ class PixelDocument:
         self.filepath = filepath
         self.animations: List[Animation] = []
         self.active_animation_index: int = 0
+        self.paths: List[VectorPath] = []
+        self.active_path_index: Optional[int] = None
 
         # Every new file MUST have at least one animation named "new-animation"
         self.animations.append(Animation("new-animation"))
+
+    @property
+    def active_path(self) -> Optional[VectorPath]:
+        if self.active_path_index is not None and 0 <= self.active_path_index < len(self.paths):
+            return self.paths[self.active_path_index]
+        return None
+
+    def add_path(self, name: Optional[str] = None, layer_id: str = "") -> VectorPath:
+        if name is None:
+            name = f"Path {len(self.paths) + 1}"
+        if not layer_id and self.active_layer:
+            layer_id = self.active_layer.name
+        vp = VectorPath(name=name, layer_id=layer_id)
+        self.paths.append(vp)
+        self.active_path_index = len(self.paths) - 1
+        return vp
+
+    def remove_path(self, index: int) -> bool:
+        if 0 <= index < len(self.paths):
+            del self.paths[index]
+            if not self.paths:
+                self.active_path_index = None
+            elif self.active_path_index is not None and self.active_path_index >= len(self.paths):
+                self.active_path_index = len(self.paths) - 1
+            return True
+        return False
+
+    def stroke_path(self, path: VectorPath, color: str, size: int = 1) -> int:
+        """Rasterizes the path outline onto the active layer using QPainter."""
+        active = self.active_layer
+        if not active or not path.anchors:
+            return 0
+
+        qpath = path.to_qpainterpath()
+        img = QImage(self.width, self.height, QImage.Format_ARGB32)
+        img.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        pen = QPen(hex_to_qcolor(color), max(1, size))
+        painter.setPen(pen)
+        painter.drawPath(qpath)
+        painter.end()
+
+        count = 0
+        for y in range(self.height):
+            for x in range(self.width):
+                col = img.pixelColor(x, y)
+                if col.alpha() > 0:
+                    active.set_pixel(x, y, qcolor_to_hex(col))
+                    count += 1
+        return count
+
+    def fill_path(self, path: VectorPath, color: str) -> int:
+        """Rasterizes the filled path interior onto the active layer using QPainter."""
+        active = self.active_layer
+        if not active or not path.anchors:
+            return 0
+
+        qpath = path.to_qpainterpath()
+        img = QImage(self.width, self.height, QImage.Format_ARGB32)
+        img.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        qcol = hex_to_qcolor(color)
+        painter.setBrush(QBrush(qcol))
+        painter.setPen(QPen(qcol, 1))
+        painter.drawPath(qpath)
+        painter.end()
+
+        count = 0
+        for y in range(self.height):
+            for x in range(self.width):
+                col = img.pixelColor(x, y)
+                if col.alpha() > 0:
+                    active.set_pixel(x, y, qcolor_to_hex(col))
+                    count += 1
+        return count
+
 
     @property
     def active_animation(self) -> Animation:
@@ -636,6 +720,8 @@ class PixelDocument:
             "height": self.height,
             "active_animation": self.active_animation_index,
             "animations": [anim.to_dict() for anim in self.animations],
+            "paths": [p.to_dict() for p in self.paths],
+            "active_path": self.active_path_index,
         }
 
     @classmethod
@@ -682,7 +768,20 @@ class PixelDocument:
 
         active_anim_idx = int(data.get("active_animation", 0))
         doc.active_animation_index = max(0, min(active_anim_idx, len(doc.animations) - 1))
+
+        # Restore vector paths
+        raw_paths = data.get("paths", [])
+        doc.paths = [VectorPath.from_dict(p) for p in raw_paths]
+        active_p = data.get("active_path", None)
+        if active_p is not None and isinstance(active_p, int) and 0 <= active_p < len(doc.paths):
+            doc.active_path_index = active_p
+        elif doc.paths:
+            doc.active_path_index = 0
+        else:
+            doc.active_path_index = None
+
         return doc
+
 
     def save_to_pix(self, filepath: str, passphrase: str = None) -> None:
         """Encodes document state to a pycaml .pix file."""

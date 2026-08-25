@@ -31,8 +31,10 @@ from coopixel.ui.canvas import CanvasWidget
 from coopixel.ui.color_panel import ColorPanel
 from coopixel.ui.dialogs import AboutDialog, CanvasSizeDialog, CropCanvasDialog, ImportImageDialog, NewCanvasDialog
 from coopixel.ui.layer_panel import LayerPanel
+from coopixel.ui.path_panel import PathPanel
 from coopixel.ui.tag_panel import TagPanel
 from coopixel.ui.tool_panel import ToolPanel
+
 
 
 class MainWindow(QMainWindow):
@@ -127,6 +129,17 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.actions_panel)
         self.actions_panel.hide()
 
+        self.path_panel = PathPanel(self.doc, self)
+        self.path_panel.path_changed.connect(self.on_path_changed)
+        self.path_panel.path_selected.connect(self.on_path_selected)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.path_panel)
+        self.path_panel.show()
+
+        # Connect tool panel pen action signals to path panel
+        self.tool_panel.pen_stroke_requested.connect(self.path_panel.on_stroke_path)
+        self.tool_panel.pen_fill_requested.connect(self.path_panel.on_fill_path)
+        self.tool_panel.pen_new_path_requested.connect(self.path_panel.on_add_path)
+
         # ---- Bottom Dock Panels ----
         self.animation_panel = AnimationPanel(self.doc, self)
         self.animation_panel.animation_structure_changed.connect(self.on_frame_structure_changed)
@@ -137,9 +150,11 @@ class MainWindow(QMainWindow):
         self.animation_panel.hide()
 
         # Tabify right dock panels so they share the right dock space cleanly when opened
+        self.tabifyDockWidget(self.path_panel, self.appearance_panel)
         self.tabifyDockWidget(self.appearance_panel, self.align_panel)
         self.tabifyDockWidget(self.align_panel, self.tag_panel)
         self.tabifyDockWidget(self.tag_panel, self.actions_panel)
+
 
         # Build Main View Layout
         drawing_area = QWidget()
@@ -461,9 +476,14 @@ class MainWindow(QMainWindow):
         toggle_layers_act.setText("Layers Panel")
         view_menu.addAction(toggle_layers_act)
 
+        toggle_paths_act = self.path_panel.toggleViewAction()
+        toggle_paths_act.setText("Paths Panel")
+        view_menu.addAction(toggle_paths_act)
+
         toggle_colors_act = self.color_panel.toggleViewAction()
         toggle_colors_act.setText("Color Panel")
         view_menu.addAction(toggle_colors_act)
+
 
         toggle_app_act = self.appearance_panel.toggleViewAction()
         toggle_app_act.setText("Appearance & Layer Effects Panel")
@@ -753,7 +773,21 @@ class MainWindow(QMainWindow):
         self.animation_panel.set_document(self.doc)
         self.tag_panel.set_document(self.doc)
         self.align_panel.set_document(self.doc)
+        self.path_panel.set_document(self.doc)
         self.update_window_title()
+
+    def on_path_changed(self) -> None:
+        """Called when a path is added, modified, stroked, filled, or deleted."""
+        self.canvas.invalidate_cache()
+        self.canvas.update()
+        self.path_panel.refresh_panel()
+        self._push_history()
+
+    def on_path_selected(self, path_idx: int) -> None:
+        """Called when user selects a path in the Paths panel."""
+        self.layer_panel.refresh_panel()
+        self.canvas.update()
+
 
     def on_layer_aligned(self, desc: str) -> None:
         """Called when active layer is aligned via AlignPanel."""
@@ -1221,6 +1255,7 @@ class MainWindow(QMainWindow):
             self.animation_panel.set_document(self.doc)
             self.tag_panel.set_document(self.doc)
             self.align_panel.set_document(self.doc)
+            self.path_panel.set_document(self.doc)
             self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
             self.update_window_title()
 
@@ -1243,6 +1278,8 @@ class MainWindow(QMainWindow):
             self.animation_panel.set_document(self.doc)
             self.tag_panel.set_document(self.doc)
             self.align_panel.set_document(self.doc)
+            self.path_panel.set_document(self.doc)
+
             self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
             self.update_window_title()
             self.status_bar.showMessage(f"Opened {filepath}", 3000)

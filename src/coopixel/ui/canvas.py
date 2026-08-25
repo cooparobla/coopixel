@@ -13,6 +13,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QTransform,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
@@ -21,7 +22,9 @@ from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
 from coopixel.tools.crop import CropTool
 from coopixel.tools.move import MoveTool
+from coopixel.tools.pen import PenTool
 from coopixel.tools.selection import SelectionTool
+
 
 
 class CanvasWidget(QWidget):
@@ -263,7 +266,11 @@ class CanvasWidget(QWidget):
         if isinstance(self.active_tool, CropTool):
             self._draw_crop_overlay(painter)
 
+        # 7.5. Vector Bezier Path Overlay
+        self._draw_vector_paths(painter)
+
         # 8. Hover cursor indicator (scaled to match current tool brush size)
+
         if self.hover_coord and self.active_tool:
             if not isinstance(self.active_tool, (CropTool, MoveTool)):
                 hx, hy = self.hover_coord
@@ -448,9 +455,78 @@ class CanvasWidget(QWidget):
             if (px + 1, py) not in selected:
                 painter.drawLine(QPointF(ox + (px + 1) * z, oy + py * z), QPointF(ox + (px + 1) * z, oy + (py + 1) * z))
 
+    def _draw_vector_paths(self, painter: QPainter) -> None:
+        """Renders vector path Bezier curves, anchor points, and control handles."""
+        if not self.doc.paths:
+            return
+
+        is_pen_active = isinstance(self.active_tool, PenTool)
+        z = self.zoom_level
+        ox = self.pan_offset.x()
+        oy = self.pan_offset.y()
+
+        for idx, path in enumerate(self.doc.paths):
+            if not path.visible or not path.anchors:
+                continue
+
+            is_active_path = (idx == self.doc.active_path_index)
+
+            # Build screen-transformed QPainterPath
+            qpath = path.to_qpainterpath()
+            transform = QTransform()
+            transform.translate(ox, oy)
+            transform.scale(z, z)
+            screen_path = transform.map(qpath)
+
+            # Draw Bezier curve line
+            if is_active_path:
+                pen = QPen(QColor("#F97316"), 2.0)  # Bright Orange for active path
+            else:
+                pen = QPen(QColor(56, 189, 248, 180), 1.5, Qt.DashLine)  # Cyan for other paths
+
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(screen_path)
+
+            # Draw Anchor Points & Handles if path is active or Pen Tool is active
+            if is_active_path or is_pen_active:
+                selected_idx = getattr(self.active_tool, "selected_anchor_idx", None) if is_pen_active else None
+
+                for a_idx, anchor in enumerate(path.anchors):
+                    ax_screen = ox + anchor.x * z
+                    ay_screen = oy + anchor.y * z
+
+                    is_selected_anchor = (is_pen_active and selected_idx == a_idx)
+
+                    # Draw handles for selected anchor point
+                    if is_selected_anchor or is_pen_active:
+                        hin = anchor.handle_in_abs
+                        hout = anchor.handle_out_abs
+                        h_in_screen = QPointF(ox + hin.x() * z, oy + hin.y() * z)
+                        h_out_screen = QPointF(ox + hout.x() * z, oy + hout.y() * z)
+
+                        # Handle lines
+                        painter.setPen(QPen(QColor(255, 255, 255, 200), 1.0))
+                        painter.drawLine(QPointF(ax_screen, ay_screen), h_in_screen)
+                        painter.drawLine(QPointF(ax_screen, ay_screen), h_out_screen)
+
+                        # Handle circles
+                        painter.setPen(QPen(QColor("#000000"), 1.0))
+                        painter.setBrush(QColor("#00E436") if is_selected_anchor else QColor("#FFFFFF"))
+                        painter.drawEllipse(h_in_screen, 3.5, 3.5)
+                        painter.drawEllipse(h_out_screen, 3.5, 3.5)
+
+                    # Draw Anchor Box
+                    box_size = 7.0 if is_selected_anchor else 5.0
+                    box_rect = QRectF(ax_screen - box_size / 2, ay_screen - box_size / 2, box_size, box_size)
+                    painter.setPen(QPen(QColor("#000000"), 1.2))
+                    painter.setBrush(QColor("#F97316") if is_selected_anchor else QColor("#FFFFFF"))
+                    painter.drawRect(box_rect)
+
     # ------------------------------------------------------------------
     # Mouse events
     # ------------------------------------------------------------------
+
 
     def _is_selection_tool(self) -> bool:
         return isinstance(self.active_tool, SelectionTool)
