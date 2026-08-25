@@ -85,7 +85,6 @@ def test_actions_panel_run_signal(qapp):
 def test_mainwindow_action_recording_and_rerun(qapp, tmp_path):
     """Verify MainWindow records crop canvas, crop layer, and image import actions and can re-run them."""
     mw = MainWindow()
-    mw.show()
 
     # 1. Test crop canvas recording
     mw.on_crop_committed(0, 0, 20, 20)
@@ -122,10 +121,14 @@ def test_mainwindow_action_recording_and_rerun(qapp, tmp_path):
         details="Format: PNG | Layer: 'ActionImported'",
     )
 
+    initial_actions_count = len(mw.actions_panel.actions)
+
     initial_layer_count = len(mw.doc.layers)
     mw.on_run_action(import_rec)
     assert len(mw.doc.layers) == initial_layer_count + 1
     assert mw.doc.active_layer.name == "ActionImported"
+    # Action count in panel should remain unchanged
+    assert len(mw.actions_panel.actions) == initial_actions_count
 
     # 4. Test rerun crop canvas
     crop_rec = ActionRecord(
@@ -137,5 +140,7 @@ def test_mainwindow_action_recording_and_rerun(qapp, tmp_path):
     mw.on_run_action(crop_rec)
     assert mw.doc.width == 15
     assert mw.doc.height == 15
+    # Action count in panel should remain unchanged
+    assert len(mw.actions_panel.actions) == initial_actions_count
 
     mw.close()

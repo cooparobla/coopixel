@@ -4,6 +4,17 @@ Provides modular, extensible layer effects (starting with Stroke).
 """
 
 from typing import Dict, List, Optional, Set, Tuple
+from PySide6.QtGui import QColor
+
+
+def _qcolor_from_hex(hex_str: str) -> QColor:
+    s = hex_str.lstrip("#")
+    if len(s) == 8:
+        return QColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16))
+    elif len(s) == 6:
+        return QColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255)
+    return QColor(hex_str)
+
 
 
 class LayerEffect:
@@ -151,6 +162,81 @@ class StrokeEffect(LayerEffect):
         )
 
 
+class HueSaturationContrastEffect(LayerEffect):
+    """Hue, Saturation, and Contrast adjustment layer effect."""
+
+    type_name: str = "hue_sat_contrast"
+    display_name: str = "Hue / Sat / Contrast"
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        hue: int = 0,
+        saturation: int = 0,
+        contrast: int = 0,
+    ):
+        super().__init__(enabled=enabled)
+        self.hue: int = max(-180, min(180, int(hue)))
+        self.saturation: int = max(-100, min(100, int(saturation)))
+        self.contrast: int = max(-100, min(100, int(contrast)))
+
+    def process_pixels(self, pixels: Dict[str, str]) -> Dict[str, str]:
+        if not self.enabled or not pixels:
+            return pixels
+        if self.hue == 0 and self.saturation == 0 and self.contrast == 0:
+            return pixels
+
+        out: Dict[str, str] = {}
+        c_val = max(-254, min(254, self.contrast))
+        f_factor = (259.0 * (c_val + 255.0)) / (255.0 * (259.0 - c_val))
+
+        sat_factor = 1.0 + (self.saturation / 100.0)
+        hue_shift = self.hue / 360.0
+
+        for coord, hex_str in pixels.items():
+            qcol = _qcolor_from_hex(hex_str)
+            r, g, b, a = qcol.red(), qcol.green(), qcol.blue(), qcol.alpha()
+
+            # 1. Hue & Saturation adjustment in HSV space
+            h_val = qcol.hueF()
+            s_val = qcol.saturationF()
+            v_val = qcol.valueF()
+
+            if h_val >= 0 and (self.hue != 0 or self.saturation != 0):
+                new_h = (h_val + hue_shift) % 1.0
+                new_s = max(0.0, min(1.0, s_val * sat_factor))
+                hsv_col = QColor.fromHsvF(new_h, new_s, v_val, a / 255.0)
+                r, g, b = hsv_col.red(), hsv_col.green(), hsv_col.blue()
+
+            # 2. Contrast adjustment
+            if self.contrast != 0:
+                r = max(0, min(255, int(f_factor * (r - 128) + 128)))
+                g = max(0, min(255, int(f_factor * (g - 128) + 128)))
+                b = max(0, min(255, int(f_factor * (b - 128) + 128)))
+
+            out[coord] = f"#{r:02X}{g:02X}{b:02X}{a:02X}"
+
+        return out
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        d.update({
+            "hue": self.hue,
+            "saturation": self.saturation,
+            "contrast": self.contrast,
+        })
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "HueSaturationContrastEffect":
+        return cls(
+            enabled=data.get("enabled", True),
+            hue=int(data.get("hue", 0)),
+            saturation=int(data.get("saturation", 0)),
+            contrast=int(data.get("contrast", 0)),
+        )
+
+
 def effect_from_dict(data: dict) -> Optional[LayerEffect]:
     """Factory helper to construct a LayerEffect instance from dictionary serialization."""
     if not isinstance(data, dict):
@@ -158,4 +244,7 @@ def effect_from_dict(data: dict) -> Optional[LayerEffect]:
     type_name = data.get("type", "")
     if type_name == StrokeEffect.type_name:
         return StrokeEffect.from_dict(data)
+    elif type_name == HueSaturationContrastEffect.type_name:
+        return HueSaturationContrastEffect.from_dict(data)
     return None
+

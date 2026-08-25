@@ -5,7 +5,7 @@ Unit tests for Coopixel document model, sparse storage, pycaml .pix serializatio
 import os
 import tempfile
 import pytest
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtGui import QAction, QColor, QImage
 from PySide6.QtWidgets import QApplication
 from coopixel.models.document import Layer, PixelDocument
 from coopixel.models.effects import StrokeEffect
@@ -150,7 +150,7 @@ def test_layer_stroke_effect():
 def test_cli_file_opening():
     app = QApplication.instance() or QApplication([])
     mw = MainWindow()
-    assert mw.windowTitle() == "Coopixel - Pixel Art Editor"
+    assert mw.windowTitle() == "COOPIXEL"
     mw.close()
 
 
@@ -614,6 +614,29 @@ def test_canvas_view_options_toggles():
     assert mw.view_btn_bounds.isChecked() is False
 
     mw.close()
+
+
+def test_delete_layer_hotkey():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    mw.layer_panel.on_add_layer()
+    assert len(mw.doc.layers) == 2
+
+    # Find the Delete Layer menu action
+    del_act = None
+    for action in mw.findChildren(QAction):
+        if action.text() == "&Delete Layer":
+            del_act = action
+            break
+
+    assert del_act is not None
+    assert del_act.shortcut().toString() in ("Delete", "Del")
+
+    # Trigger action shortcut callback
+    del_act.trigger()
+    assert len(mw.doc.layers) == 1
+    mw.close()
+
 
 
 

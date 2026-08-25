@@ -3,6 +3,7 @@ Main Window for Coopixel Pixel Art Editor.
 Integrates dark theme, standard photo editor menu bar, tool toolbar, canvas viewport, dock panels, and layer effects.
 """
 
+import copy
 import os
 from typing import Optional, Tuple
 from PySide6.QtCore import Qt
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 from coopixel.models.document import PixelDocument, hex_to_qcolor
 from coopixel.models.history import HistoryStack
 from coopixel.ui.actions_panel import ActionRecord, ActionsPanel
+from coopixel.ui.align_panel import AlignPanel
 from coopixel.ui.animation_panel import AnimationPanel
 from coopixel.ui.appearance_panel import AppearancePanel
 from coopixel.ui.canvas import CanvasWidget
@@ -36,7 +38,7 @@ from coopixel.ui.tool_panel import ToolPanel
 class MainWindow(QMainWindow):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("Coopixel - Pixel Art Editor")
+        self.setWindowTitle("COOPIXEL")
         self.resize(1280, 820)
 
         # Set window icon
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         # ---- Document & History ----
         self.doc: PixelDocument = PixelDocument(32, 32)
         self.history: HistoryStack = HistoryStack(max_depth=50)
+        self._clean_state_snapshot: Optional[dict] = copy.deepcopy(self.doc.to_dict())
 
         # ---- Canvas (Central Widget) ----
         self.canvas = CanvasWidget(self.doc)
@@ -56,12 +59,6 @@ class MainWindow(QMainWindow):
         self.canvas.stroke_committed.connect(self.on_stroke_committed)
         # canvas_updated = live repaint during stroke (no history)
         self.canvas.canvas_updated.connect(self.canvas.update)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #141414; }")
-        scroll_area.setWidget(self.canvas)
-        self.setCentralWidget(scroll_area)
 
         # ---- Tool Options Bar (top toolbar) ----
         self.tool_panel = ToolPanel(self)
@@ -110,6 +107,11 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(self.layer_panel, self.color_panel, Qt.Vertical)
 
         # ---- Right-side Dock Panels ----
+        self.align_panel = AlignPanel(self.doc, self)
+        self.align_panel.align_committed.connect(self.on_layer_aligned)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.align_panel)
+        self.align_panel.hide()
+
         self.appearance_panel = AppearancePanel(self.doc, self)
         self.appearance_panel.effect_changed.connect(self.on_layer_structure_changed)
         self.addDockWidget(Qt.RightDockWidgetArea, self.appearance_panel)
@@ -134,6 +136,19 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, self.animation_panel)
         self.animation_panel.hide()
 
+        # Tabify right dock panels so they share the right dock space cleanly when opened
+        self.tabifyDockWidget(self.appearance_panel, self.align_panel)
+        self.tabifyDockWidget(self.align_panel, self.tag_panel)
+        self.tabifyDockWidget(self.tag_panel, self.actions_panel)
+
+        # Build Main View Layout
+        drawing_area = QWidget()
+        drawing_layout = QHBoxLayout(drawing_area)
+        drawing_layout.setContentsMargins(0, 0, 0, 0)
+        drawing_layout.setSpacing(0)
+        drawing_layout.addWidget(self.canvas, stretch=1)
+        self.setCentralWidget(drawing_area)
+
         # Sync initial colors
         self.canvas.primary_color = self.color_panel.primary_color
         self.canvas.secondary_color = self.color_panel.secondary_color
@@ -150,6 +165,7 @@ class MainWindow(QMainWindow):
         self._build_menu_bar()
         self.update_status_bar(0, 0)
         self._push_history()
+        self.update_window_title()
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -162,7 +178,7 @@ class MainWindow(QMainWindow):
         return tb
 
     def _build_right_sidebar_toolbar(self) -> None:
-        """Icon-only vertical toolbar on the right side of drawing area for Appearance panel toggle."""
+        """Icon-only vertical toolbar on the right side of drawing area for panel toggles."""
         right_tb = QToolBar("Sidebar", self)
         right_tb.setMovable(False)
         right_tb.setOrientation(Qt.Vertical)
@@ -172,6 +188,13 @@ class MainWindow(QMainWindow):
             "QToolButton:hover { background: #332B25; border-color: #F97316; }"
             "QToolButton:checked { background: #2E2620; border-color: #F97316; color: #F97316; }"
         )
+
+        align_act = QAction("📐", self)
+        align_act.setToolTip("Align Layer to Canvas")
+        align_act.setCheckable(True)
+        align_act.setChecked(self.align_panel.isVisible())
+        align_act.toggled.connect(self.align_panel.setVisible)
+        self.align_panel.visibilityChanged.connect(align_act.setChecked)
 
         app_act = QAction("✨", self)
         app_act.setToolTip("Appearance & Layer Effects")
@@ -201,15 +224,12 @@ class MainWindow(QMainWindow):
         anim_act.toggled.connect(self.animation_panel.setVisible)
         self.animation_panel.visibilityChanged.connect(anim_act.setChecked)
 
+        right_tb.addAction(align_act)
         right_tb.addAction(app_act)
         right_tb.addAction(tag_act)
         right_tb.addAction(actions_act)
         right_tb.addAction(anim_act)
         self.addToolBar(Qt.RightToolBarArea, right_tb)
-
-
-
-
 
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
@@ -386,6 +406,16 @@ class MainWindow(QMainWindow):
         circle_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("circle"))
         self.addAction(circle_tool_act)
 
+        decrease_size_act = QAction("Decrease Tool Size", self)
+        decrease_size_act.setShortcut(QKeySequence("["))
+        decrease_size_act.triggered.connect(self._decrease_brush_size)
+        self.addAction(decrease_size_act)
+
+        increase_size_act = QAction("Increase Tool Size", self)
+        increase_size_act.setShortcut(QKeySequence("]"))
+        increase_size_act.triggered.connect(self._increase_brush_size)
+        self.addAction(increase_size_act)
+
         # ---- VIEW ----
         view_menu = menu_bar.addMenu("&View")
 
@@ -403,6 +433,12 @@ class MainWindow(QMainWindow):
         reset_zoom_act.setShortcut(QKeySequence("Ctrl+0"))
         reset_zoom_act.triggered.connect(self._reset_view)
         view_menu.addAction(reset_zoom_act)
+
+        center_canvas_act = QAction("Center &Canvas", self)
+        center_canvas_act.setShortcut(QKeySequence("A"))
+        center_canvas_act.triggered.connect(self._center_canvas)
+        view_menu.addAction(center_canvas_act)
+        self.addAction(center_canvas_act)
 
         view_menu.addSeparator()
 
@@ -450,6 +486,7 @@ class MainWindow(QMainWindow):
         layer_menu.addAction(dup_l_act)
 
         del_l_act = QAction("&Delete Layer", self)
+        del_l_act.setShortcut(QKeySequence.Delete)
         del_l_act.triggered.connect(self.layer_panel.on_delete_layer)
         layer_menu.addAction(del_l_act)
 
@@ -630,6 +667,56 @@ class MainWindow(QMainWindow):
 
         self.status_bar.addPermanentWidget(options_widget)
 
+    def is_dirty(self) -> bool:
+        """Returns True if current document state differs from last saved or clean state."""
+        if self._clean_state_snapshot is None:
+            return False
+        return self.doc.to_dict() != self._clean_state_snapshot
+
+    def update_window_title(self) -> None:
+        """Updates main window title bar with document file path and dirty indicator (*) if modified."""
+        if self.doc.filepath:
+            name = self.doc.filepath
+        else:
+            name = "Pixel Art Editor"
+
+        dirty_star = "*" if self.is_dirty() else ""
+        self.setWindowTitle(f"Coopixel - {name}{dirty_star}")
+
+    def maybe_save_changes(self, action_desc: str = "closing") -> bool:
+        """Prompts user to save changes if document is dirty.
+        Returns True if safe to proceed (saved or discarded), False if user cancelled.
+        """
+        if not self.is_dirty():
+            return True
+
+        if self.doc.filepath:
+            filename = os.path.basename(self.doc.filepath)
+        else:
+            filename = "Untitled.pix"
+
+        res = QMessageBox.question(
+            self,
+            "Save Changes?",
+            f"Do you want to save changes to '{filename}' before {action_desc}?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+
+        if res == QMessageBox.Save:
+            return self.on_file_save()
+        elif res == QMessageBox.Discard:
+            return True
+        else:
+            return False
+
+    def closeEvent(self, event) -> None:
+        """Intercepts window close event to prompt for unsaved changes."""
+        if self.maybe_save_changes(action_desc="closing"):
+            event.accept()
+        else:
+            event.ignore()
+
     def _push_history(self) -> None:
         """Push current document state and selection state to the history stack."""
         doc_dict = self.doc.to_dict()
@@ -638,6 +725,7 @@ class MainWindow(QMainWindow):
         else:
             doc_dict["selection"] = []
         self.history.push(doc_dict)
+        self.update_window_title()
 
     def _restore_from_dict(self, state: dict) -> None:
         """Restore document and selection state from a state dict and update all UI, preserving current view."""
@@ -664,6 +752,15 @@ class MainWindow(QMainWindow):
         self.appearance_panel.set_document(self.doc)
         self.animation_panel.set_document(self.doc)
         self.tag_panel.set_document(self.doc)
+        self.align_panel.set_document(self.doc)
+        self.update_window_title()
+
+    def on_layer_aligned(self, desc: str) -> None:
+        """Called when active layer is aligned via AlignPanel."""
+        self.canvas.invalidate_cache()
+        self.canvas.update()
+        self.status_bar.showMessage(desc, 1500)
+        self._push_history()
 
     def on_selection_committed(self) -> None:
         """Called when a selection is created, modified, or cleared — pushes history state."""
@@ -741,9 +838,31 @@ class MainWindow(QMainWindow):
 
     def on_tool_selected(self, tool) -> None:
         self.canvas.active_tool = tool
+        self.canvas.update()
 
     def on_brush_size_changed(self, size: int) -> None:
         self.canvas.brush_size = size
+        self.canvas.update()
+
+    def _decrease_brush_size(self) -> None:
+        cur = self.tool_panel.size_spin.value()
+        if cur > 1:
+            new_size = cur - 1
+            self.tool_panel.size_spin.setValue(new_size)
+            self.canvas.update()
+            self.status_bar.showMessage(f"Tool size: {new_size} px", 1000)
+
+    def _increase_brush_size(self) -> None:
+        cur = self.tool_panel.size_spin.value()
+        if cur < 32:
+            new_size = cur + 1
+            self.tool_panel.size_spin.setValue(new_size)
+            self.canvas.update()
+            self.status_bar.showMessage(f"Tool size: {new_size} px", 1000)
+
+    def _center_canvas(self) -> None:
+        self.canvas.center_canvas()
+        self.status_bar.showMessage("Centered canvas", 1000)
 
     def on_shape_filled_changed(self, filled: bool) -> None:
         self.canvas.shape_filled = filled
@@ -832,7 +951,7 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage("No pixel content found to crop to", 2000)
 
-    def on_crop_committed(self, x: int, y: int, w: int, h: int) -> None:
+    def on_crop_committed(self, x: int, y: int, w: int, h: int, record: bool = True) -> None:
         if w <= 0 or h <= 0:
             return
 
@@ -854,13 +973,14 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         self.status_bar.showMessage(f"Cropped canvas to {w}×{h} px at ({x}, {y})", 2000)
 
-        # Record crop_canvas action
-        self.actions_panel.record_action(
-            action_type="crop_canvas",
-            params={"x": x, "y": y, "width": w, "height": h},
-            display_name="Crop Canvas",
-            details=f"Bounds: {w}×{h} px at ({x}, {y})",
-        )
+        if record:
+            # Record crop_canvas action
+            self.actions_panel.record_action(
+                action_type="crop_canvas",
+                params={"x": x, "y": y, "width": w, "height": h},
+                display_name="Crop Canvas",
+                details=f"Bounds: {w}×{h} px at ({x}, {y})",
+            )
 
     def on_crop_layer_requested(self) -> None:
         active_name = self.doc.active_layer.name if self.doc.active_layer else "Active Layer"
@@ -1073,6 +1193,8 @@ class MainWindow(QMainWindow):
     # ---- File Actions ----
 
     def on_file_new(self) -> None:
+        if not self.maybe_save_changes(action_desc="creating a new canvas"):
+            return
         dlg = NewCanvasDialog(self)
         if dlg.exec() == NewCanvasDialog.Accepted:
             w, h, bg = dlg.get_values()
@@ -1097,14 +1219,18 @@ class MainWindow(QMainWindow):
             self.layer_panel.set_document(self.doc)
             self.appearance_panel.set_document(self.doc)
             self.animation_panel.set_document(self.doc)
-            self.setWindowTitle("Coopixel - Pixel Art Editor")
+            self.tag_panel.set_document(self.doc)
+            self.align_panel.set_document(self.doc)
+            self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
+            self.update_window_title()
 
     def open_file(self, filepath: str) -> bool:
         """Opens a .pix / .caml file directly from the given file path."""
         if not os.path.exists(filepath):
             # If target file does not exist yet, set it as active filepath for saving
             self.doc.filepath = filepath
-            self.setWindowTitle(f"Coopixel - {filepath}")
+            self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
+            self.update_window_title()
             return True
         try:
             self.doc = PixelDocument.load_from_pix(filepath)
@@ -1115,7 +1241,10 @@ class MainWindow(QMainWindow):
             self.layer_panel.set_document(self.doc)
             self.appearance_panel.set_document(self.doc)
             self.animation_panel.set_document(self.doc)
-            self.setWindowTitle(f"Coopixel - {filepath}")
+            self.tag_panel.set_document(self.doc)
+            self.align_panel.set_document(self.doc)
+            self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
+            self.update_window_title()
             self.status_bar.showMessage(f"Opened {filepath}", 3000)
             return True
         except Exception as e:
@@ -1123,35 +1252,45 @@ class MainWindow(QMainWindow):
             return False
 
     def on_file_open(self) -> None:
+        if not self.maybe_save_changes(action_desc="opening another file"):
+            return
         filepath, _ = QFileDialog.getOpenFileName(
             self, "Open Coopixel File", "", "Coopixel / CAML Files (*.pix *.caml);;All Files (*)"
         )
         if filepath:
             self.open_file(filepath)
 
-
-    def on_file_save(self) -> None:
+    def on_file_save(self) -> bool:
         if self.doc.filepath:
             try:
                 self.doc.save_to_pix(self.doc.filepath)
-                self.setWindowTitle(f"Coopixel - {self.doc.filepath}")
+                self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
+                self.update_window_title()
                 self.status_bar.showMessage("File saved successfully.", 3000)
+                return True
             except Exception as e:
                 QMessageBox.critical(self, "Error Saving File", f"Failed to save file:\n{e}")
+                return False
         else:
-            self.on_file_save_as()
+            return self.on_file_save_as()
 
-    def on_file_save_as(self) -> None:
+    def on_file_save_as(self) -> bool:
+        default_name = self.doc.filepath if self.doc.filepath else "untitled.pix"
         filepath, _ = QFileDialog.getSaveFileName(
-            self, "Save Coopixel File", "untitled.pix", "Coopixel Image (*.pix);;CAML File (*.caml)"
+            self, "Save Coopixel File", default_name, "Coopixel Image (*.pix);;CAML File (*.caml)"
         )
         if filepath:
             try:
                 self.doc.save_to_pix(filepath)
-                self.setWindowTitle(f"Coopixel - {filepath}")
+                self.doc.filepath = filepath
+                self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
+                self.update_window_title()
                 self.status_bar.showMessage("File saved successfully.", 3000)
+                return True
             except Exception as e:
                 QMessageBox.critical(self, "Error Saving File", f"Failed to save file:\n{e}")
+                return False
+        return False
 
     def on_file_import_png(self) -> None:
         filepath, _ = QFileDialog.getOpenFileName(
@@ -1237,14 +1376,7 @@ class MainWindow(QMainWindow):
                     self.layer_panel.refresh_list()
                     self.appearance_panel.refresh_panel()
                     self.animation_panel.refresh_timeline()
-                    ext = os.path.splitext(filepath)[1].lstrip(".").upper() or "IMAGE"
                     filename = os.path.basename(filepath)
-                    self.actions_panel.record_action(
-                        action_type="import_layer",
-                        params=dict(params),
-                        display_name=f"Import Image ({filename})",
-                        details=f"Format: {ext} | Layer: '{layer.name}' | Resize Canvas: {'Yes' if resize_canvas else 'No'} | Scale: {'Yes' if scale_to_canvas else 'No'}",
-                    )
                     self.status_bar.showMessage(f"Re-run: Imported {filename} as layer '{layer.name}'", 3000)
             except Exception as e:
                 QMessageBox.critical(self, "Action Error", f"Failed to re-run image import:\n{e}")
@@ -1254,10 +1386,15 @@ class MainWindow(QMainWindow):
             y = params.get("y", 0)
             w = params.get("width", self.doc.width)
             h = params.get("height", self.doc.height)
-            self.on_crop_committed(x, y, w, h)
+            self.on_crop_committed(x, y, w, h, record=False)
 
         elif atype == "crop_layer":
-            self.layer_panel.on_crop_layer_to_canvas()
+            self.doc.crop_active_layer_to_canvas()
+            self._push_history()
+            self.canvas.invalidate_cache()
+            self.canvas.update()
+            self.layer_panel.refresh_list()
+            self.status_bar.showMessage("Re-run: Cropped active layer to canvas", 2000)
 
     def on_file_export_png(self) -> None:
         filepath, _ = QFileDialog.getSaveFileName(

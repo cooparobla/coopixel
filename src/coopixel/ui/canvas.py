@@ -112,15 +112,20 @@ class CanvasWidget(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if not self._initial_centered and self.width() > 0 and self.height() > 0:
-            self._initial_centered = True
-            self.center_canvas()
+        QTimer.singleShot(0, self._auto_center_canvas)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if not self._initial_centered and event.size().width() > 0 and event.size().height() > 0:
-            self._initial_centered = True
             self.center_canvas()
+            if event.size().width() > 400 and event.size().height() > 300:
+                self._initial_centered = True
+
+    def _auto_center_canvas(self) -> None:
+        if not self._initial_centered and self.width() > 0 and self.height() > 0:
+            self.center_canvas()
+            if self.width() > 400 and self.height() > 300:
+                self._initial_centered = True
 
     def set_zoom(self, zoom: float) -> None:
         self.zoom_level = max(1.0, min(128.0, zoom))
@@ -258,19 +263,32 @@ class CanvasWidget(QWidget):
         if isinstance(self.active_tool, CropTool):
             self._draw_crop_overlay(painter)
 
-        # 8. Hover cursor indicator
-        if self.hover_coord:
-            hx, hy = self.hover_coord
-            if self.doc.is_valid_coord(hx, hy):
-                cursor_rect = QRectF(
-                    self.pan_offset.x() + hx * self.zoom_level,
-                    self.pan_offset.y() + hy * self.zoom_level,
-                    self.zoom_level,
-                    self.zoom_level,
-                )
-                c_pen = QPen(QColor("#60A5FA"), 1.5, Qt.DashLine)
-                painter.setPen(c_pen)
-                painter.drawRect(cursor_rect)
+        # 8. Hover cursor indicator (scaled to match current tool brush size)
+        if self.hover_coord and self.active_tool:
+            if not isinstance(self.active_tool, (CropTool, MoveTool)):
+                hx, hy = self.hover_coord
+                if self.doc.is_valid_coord(hx, hy):
+                    effective_size = 1 if getattr(self.active_tool, "name", "") == "picker" else max(1, self.brush_size)
+                    half = effective_size // 2
+                    start_x = hx - half
+                    start_y = hy - half
+                    z = self.zoom_level
+                    ox = self.pan_offset.x()
+                    oy = self.pan_offset.y()
+
+                    cursor_rect = QRectF(
+                        ox + start_x * z,
+                        oy + start_y * z,
+                        effective_size * z,
+                        effective_size * z,
+                    )
+
+                    # Soft translucent blue fill + dashed blue border for high clarity
+                    painter.fillRect(cursor_rect, QColor(96, 165, 250, 35))
+                    c_pen = QPen(QColor("#60A5FA"), 1.5, Qt.DashLine)
+                    painter.setPen(c_pen)
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(cursor_rect)
 
     def _draw_active_layer_bounds(self, painter: QPainter) -> None:
         """Renders a faint outline around the bounding box of non-transparent content in the active layer."""
@@ -280,7 +298,7 @@ class CanvasWidget(QWidget):
         if not active_layer or not active_layer.visible or not active_layer.pixels:
             return
 
-        bbox = active_layer.get_content_bbox(self.doc.width, self.doc.height)
+        bbox = active_layer.get_content_bbox()
         if not bbox:
             return
 
@@ -297,6 +315,16 @@ class CanvasWidget(QWidget):
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(bounds_rect)
+
+        # Draw resize handle if Move tool is active
+        if isinstance(self.active_tool, MoveTool) and not active_layer.locked:
+            handle_size = 7.0
+            br_x = ox + (bx + bw) * z
+            br_y = oy + (by + bh) * z
+            handle_rect = QRectF(br_x - handle_size / 2, br_y - handle_size / 2, handle_size, handle_size)
+            painter.setPen(QPen(QColor("#0284C7"), 1.5))
+            painter.setBrush(QColor("#FFFFFF"))
+            painter.drawRect(handle_rect)
 
     def _draw_crop_overlay(self, painter: QPainter) -> None:
         """Renders Photoshop-style crop overlay: dimmed dark outside area + dashed border + handle corners."""
@@ -441,8 +469,8 @@ class CanvasWidget(QWidget):
         if event.button() == Qt.LeftButton and self.active_tool:
             px, py = self.window_to_canvas_coord(event.position())
 
-            # Shift-constrain for crop tool
-            if isinstance(self.active_tool, CropTool):
+            # Shift-constrain for crop tool & move tool
+            if isinstance(self.active_tool, (CropTool, MoveTool)):
                 self.active_tool.constrain_square = bool(event.modifiers() & Qt.ShiftModifier)
 
             # Set operation modifier for selection tool
@@ -455,9 +483,24 @@ class CanvasWidget(QWidget):
                 else:
                     sel_tool._op = "replace"
 
-            changed = self.active_tool.mouse_press(
-                self.doc, px, py, self.primary_color, self.secondary_color, self.brush_size, self.shape_filled, self.selection
-            )
+            if isinstance(self.active_tool, MoveTool):
+                changed = self.active_tool.mouse_press(
+                    self.doc,
+                    px,
+                    py,
+                    self.primary_color,
+                    self.secondary_color,
+                    self.brush_size,
+                    self.shape_filled,
+                    self.selection,
+                    screen_pos=event.position(),
+                    pan_offset=self.pan_offset,
+                    zoom=self.zoom_level,
+                )
+            else:
+                changed = self.active_tool.mouse_press(
+                    self.doc, px, py, self.primary_color, self.secondary_color, self.brush_size, self.shape_filled, self.selection
+                )
             if changed:
                 self._stroke_dirty = True
                 self.canvas_updated.emit()
@@ -491,13 +534,20 @@ class CanvasWidget(QWidget):
             self.update()
             return
 
+        # Cursor shape update when hovering over move tool handle
+        if isinstance(self.active_tool, MoveTool) and not (event.buttons() & Qt.LeftButton):
+            if self.active_tool.is_over_resize_handle(self.doc, event.position(), self.pan_offset, self.zoom_level):
+                self.setCursor(Qt.SizeFDiagCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+
         if self.active_tool and (event.buttons() & Qt.LeftButton):
             # Update shift-constrain live during drag
-            if isinstance(self.active_tool, CropTool):
+            if isinstance(self.active_tool, (CropTool, MoveTool)):
                 self.active_tool.constrain_square = bool(event.modifiers() & Qt.ShiftModifier)
 
             changed = self.active_tool.mouse_move(
-                self.doc, px, py, self.primary_color, self.brush_size, self.shape_filled, self.selection
+                self.doc, px, py, self.primary_color, self.secondary_color, self.brush_size, self.shape_filled, self.selection
             )
             if changed:
                 self._stroke_dirty = True
@@ -522,7 +572,7 @@ class CanvasWidget(QWidget):
             px, py = self.window_to_canvas_coord(event.position())
 
             # Final shift-constrain state on release
-            if isinstance(self.active_tool, CropTool):
+            if isinstance(self.active_tool, (CropTool, MoveTool)):
                 self.active_tool.constrain_square = bool(event.modifiers() & Qt.ShiftModifier)
 
             changed = self.active_tool.mouse_release(
@@ -607,6 +657,27 @@ class CanvasWidget(QWidget):
                     self.stroke_committed.emit()
                     self.update()
                 return
+
+        if event.key() == Qt.Key_BracketLeft:
+            main_win = self.window()
+            if hasattr(main_win, "_decrease_brush_size"):
+                main_win._decrease_brush_size()
+            elif self.brush_size > 1:
+                self.brush_size -= 1
+                self.update()
+            return
+        elif event.key() == Qt.Key_BracketRight:
+            main_win = self.window()
+            if hasattr(main_win, "_increase_brush_size"):
+                main_win._increase_brush_size()
+            elif self.brush_size < 32:
+                self.brush_size += 1
+                self.update()
+            return
+
+        if event.key() == Qt.Key_A:
+            self.center_canvas()
+            return
 
         if event.key() == Qt.Key_Escape and not self.selection.is_empty():
             self.selection.clear()

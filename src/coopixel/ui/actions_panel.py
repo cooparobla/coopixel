@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDockWidget,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -24,6 +25,51 @@ class ActionRecord:
     display_name: str
     details: str
     params: Dict[str, Any] = field(default_factory=dict)
+
+
+class ActionItemWidget(QFrame):
+    """Custom widget for rendering a two-line action item inside QListWidget with smooth selection styling."""
+
+    def __init__(self, index: int, record: ActionRecord, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("ActionItemWidget")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(3)
+
+        self.title_lbl = QLabel(f"{index}. {record.display_name}")
+        self.detail_lbl = QLabel(record.details)
+        self.detail_lbl.setWordWrap(True)
+
+        layout.addWidget(self.title_lbl)
+        layout.addWidget(self.detail_lbl)
+
+        self.set_selected(False)
+
+    def set_selected(self, selected: bool) -> None:
+        if selected:
+            self.setStyleSheet(
+                "QFrame#ActionItemWidget { background-color: #3F2D20; border: 1px solid #F97316; border-radius: 4px; }\n"
+                "QLabel { background: transparent; background-color: transparent; border: none; }"
+            )
+            self.title_lbl.setStyleSheet(
+                "font-weight: bold; color: #F97316; font-size: 11px; background: transparent; border: none;"
+            )
+            self.detail_lbl.setStyleSheet(
+                "color: #FED7AA; font-size: 10px; background: transparent; border: none;"
+            )
+        else:
+            self.setStyleSheet(
+                "QFrame#ActionItemWidget { background-color: #282828; border: 1px solid #333333; border-radius: 4px; }\n"
+                "QLabel { background: transparent; background-color: transparent; border: none; }"
+            )
+            self.title_lbl.setStyleSheet(
+                "font-weight: bold; color: #F1F5F9; font-size: 11px; background: transparent; border: none;"
+            )
+            self.detail_lbl.setStyleSheet(
+                "color: #94A3B8; font-size: 10px; background: transparent; border: none;"
+            )
 
 
 class ActionsPanel(QDockWidget):
@@ -47,21 +93,22 @@ class ActionsPanel(QDockWidget):
 
         # Header Info
         header_lbl = QLabel("Action History (Max 10)")
-        header_lbl.setStyleSheet("color: #F97316; font-weight: bold; font-size: 11px;")
+        header_lbl.setStyleSheet("color: #F97316; font-weight: bold; font-size: 11px; background: transparent;")
         main_layout.addWidget(header_lbl)
 
         sub_lbl = QLabel("Select an action and click 'Run Action' to repeat it.")
-        sub_lbl.setStyleSheet("color: #94A3B8; font-size: 10px;")
+        sub_lbl.setStyleSheet("color: #94A3B8; font-size: 10px; background: transparent;")
         sub_lbl.setWordWrap(True)
         main_layout.addWidget(sub_lbl)
 
         # Action List Widget
         self.list_widget = QListWidget()
         self.list_widget.setStyleSheet(
-            "QListWidget { background-color: #242424; border: 1px solid #333333; border-radius: 4px; padding: 2px; color: #F1F5F9; }"
-            "QListWidget::item { padding: 6px; border-bottom: 1px solid #2D2D2D; border-radius: 3px; }"
-            "QListWidget::item:hover { background-color: #332B25; }"
-            "QListWidget::item:selected { background-color: #3F2D20; border: 1px solid #F97316; color: #F97316; font-weight: bold; }"
+            "QListWidget { background-color: #242424; border: 1px solid #333333; border-radius: 4px; padding: 4px; outline: 0; }"
+            "QListWidget::item { margin-bottom: 4px; padding: 0px; border: none; background: transparent; background-color: transparent; }"
+            "QListWidget::item:selected { background: transparent; background-color: transparent; border: none; }"
+            "QListWidget::item:hover { background: transparent; background-color: transparent; border: none; }"
+            "QListWidget::item:focus { background: transparent; background-color: transparent; border: none; }"
         )
         self.list_widget.itemSelectionChanged.connect(self._on_selection_changed)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
@@ -127,14 +174,22 @@ class ActionsPanel(QDockWidget):
     def _refresh_list_ui(self) -> None:
         self.list_widget.clear()
         for idx, rec in enumerate(self.actions, start=1):
-            text = f"{idx}. {rec.display_name}\n   {rec.details}"
-            item = QListWidgetItem(text)
+            item = QListWidgetItem()
+            widget = ActionItemWidget(idx, rec)
+            item.setSizeHint(widget.sizeHint())
             self.list_widget.addItem(item)
+            self.list_widget.setItemWidget(item, widget)
         self._on_selection_changed()
 
     def _on_selection_changed(self) -> None:
         row = self.list_widget.currentRow()
         self.run_btn.setEnabled(0 <= row < len(self.actions))
+
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            w = self.list_widget.itemWidget(item)
+            if isinstance(w, ActionItemWidget):
+                w.set_selected(i == row)
 
     def _on_run_clicked(self) -> None:
         row = self.list_widget.currentRow()

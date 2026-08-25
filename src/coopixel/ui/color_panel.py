@@ -3,7 +3,7 @@ from typing import List, Optional
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import (
-    QColorDialog,
+    QDialog,
     QDockWidget,
     QFileDialog,
     QFrame,
@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .color_dialog import ColorPickerDialog
+
 
 
 def _qcolor_from_hex(hex_str: str) -> QColor:
@@ -122,6 +124,7 @@ class ColorPanel(QDockWidget):
         layout = QVBoxLayout(main_widget)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignTop)
 
         # 1. Active Swatches Display
         swatch_layout = QHBoxLayout()
@@ -188,10 +191,26 @@ class ColorPanel(QDockWidget):
         btn_layout.addWidget(self.reset_pal_btn)
         layout.addLayout(btn_layout)
 
-        # 3. Palette Header
+        # 3. Palette Header with Minimize / Expand Toggle Button
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(4)
+
+        self.toggle_pal_btn = QPushButton("▶")
+        self.toggle_pal_btn.setFixedSize(20, 20)
+        self.toggle_pal_btn.setToolTip("Minimize / Expand Palette Display")
+        self.toggle_pal_btn.setObjectName("secondaryButton")
+        self.toggle_pal_btn.setStyleSheet("QPushButton { font-size: 9px; padding: 0px; border-radius: 3px; }")
+        self.toggle_pal_btn.clicked.connect(self.toggle_palette_visibility)
+
         self.palette_header = QLabel("Pixel Art Palette")
         self.palette_header.setStyleSheet("font-weight: 600; color: #94A3B8; font-size: 11px;")
-        layout.addWidget(self.palette_header)
+        self.palette_header.setCursor(Qt.PointingHandCursor)
+        self.palette_header.mousePressEvent = lambda e: self.toggle_palette_visibility()
+
+        header_layout.addWidget(self.toggle_pal_btn)
+        header_layout.addWidget(self.palette_header)
+        header_layout.addStretch(1)
+        layout.addLayout(header_layout)
 
         # 4. Scrollable Swatch Grid
         self.scroll_area = QScrollArea()
@@ -205,10 +224,24 @@ class ColorPanel(QDockWidget):
 
         self.scroll_area.setWidget(self.grid_container)
         layout.addWidget(self.scroll_area, stretch=1)
+        layout.addStretch(1)
+
+        # Default state: minimized
+        self._palette_expanded = False
+        self.scroll_area.hide()
 
         self.setWidget(main_widget)
         self.reset_to_default_palette()
         self.update_swatch_displays()
+
+    def toggle_palette_visibility(self) -> None:
+        """Toggles visibility of the scrollable palette swatch grid."""
+        self._palette_expanded = not self._palette_expanded
+        self.scroll_area.setVisible(self._palette_expanded)
+        self.toggle_pal_btn.setText("▼" if self._palette_expanded else "▶")
+
+
+
 
     def set_swatches(self, swatches: List[str], palette_name: Optional[str] = None) -> None:
         """Rebuilds the color swatch grid from a list of hex color strings."""
@@ -297,13 +330,17 @@ class ColorPanel(QDockWidget):
 
     def pick_custom_color(self, is_primary: bool) -> None:
         current = self.primary_color if is_primary else self.secondary_color
-        initial = _qcolor_from_hex(current)
-        col = QColorDialog.getColor(initial, self, "Select Color", QColorDialog.ShowAlphaChannel)
-        if col.isValid():
-            hex_str = _hex_from_qcolor(col)
+        dialog = ColorPickerDialog(
+            initial_color=current,
+            swatches=self.current_swatches,
+            parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted:
+            hex_str = dialog.get_selected_color_hex()
             if is_primary:
                 self.set_primary_color(hex_str)
             else:
                 self.set_secondary_color(hex_str)
+
 
 

@@ -719,11 +719,14 @@ class PixelDocument:
                 continue
 
             # Compute layer effects if present
+            base_pixels = dict(layer.pixels)
             below_map: Dict[str, str] = {}
             above_map: Dict[str, str] = {}
             for eff in layer.effects:
                 if eff and eff.enabled:
-                    b_dict, a_dict = eff.render_effect(layer.pixels, w, h)
+                    if hasattr(eff, "process_pixels"):
+                        base_pixels = eff.process_pixels(base_pixels)
+                    b_dict, a_dict = eff.render_effect(base_pixels, w, h)
                     below_map.update(b_dict)
                     above_map.update(a_dict)
 
@@ -748,10 +751,11 @@ class PixelDocument:
 
             # 1. Below-effect pixels (e.g. outside stroke)
             _write_pixels(below_map)
-            # 2. Base layer pixels
-            _write_pixels(layer.pixels)
+            # 2. Base layer pixels (with color modifications applied)
+            _write_pixels(base_pixels)
             # 3. Above-effect pixels (e.g. inside stroke)
             _write_pixels(above_map)
+
 
             layer_img = QImage(bytes(buf), w, h, stride, QImage.Format_ARGB32)
 

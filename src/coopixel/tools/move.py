@@ -4,13 +4,14 @@ Shifts the active layer pixels (and active selection) interactively across the c
 """
 
 from typing import Dict, Optional, Set, Tuple
+from PySide6.QtCore import QPointF
 from coopixel.models.document import PixelDocument
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
 
 
 class MoveTool(Tool):
-    """Tool for moving active layer pixels by dragging or nudging."""
+    """Tool for moving or resizing active layer pixels by dragging or nudging."""
 
     name: str = "move"
     display_name: str = "Move Tool"
@@ -20,6 +21,29 @@ class MoveTool(Tool):
         self.drag_start: Optional[Tuple[int, int]] = None
         self.initial_pixels: Dict[str, str] = {}
         self.initial_selection: Optional[Set[Tuple[int, int]]] = None
+        self.is_resizing: bool = False
+        self.initial_bbox: Optional[Tuple[int, int, int, int]] = None
+        self.constrain_square: bool = False
+
+    def is_over_resize_handle(
+        self,
+        doc: PixelDocument,
+        screen_pos: QPointF,
+        pan_offset: QPointF,
+        zoom: float,
+        tolerance: float = 8.0,
+    ) -> bool:
+        """Determines if the given screen position is hovering over the active layer's bottom-right resize handle."""
+        active = doc.active_layer
+        if not active or active.locked or not active.visible or not active.pixels:
+            return False
+        bbox = active.get_content_bbox()
+        if not bbox:
+            return False
+        bx, by, bw, bh = bbox
+        br_x = pan_offset.x() + (bx + bw) * zoom
+        br_y = pan_offset.y() + (by + bh) * zoom
+        return (abs(screen_pos.x() - br_x) <= tolerance) and (abs(screen_pos.y() - br_y) <= tolerance)
 
     def mouse_press(
         self,
@@ -31,10 +55,36 @@ class MoveTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional[SelectionModel] = None,
+        screen_pos: Optional[QPointF] = None,
+        pan_offset: Optional[QPointF] = None,
+        zoom: float = 1.0,
     ) -> bool:
         self.is_drawing = True
         self.drag_start = (x, y)
         active = doc.active_layer
+
+        if active and not active.locked and active.visible and active.pixels:
+            bbox = active.get_content_bbox()
+            if bbox:
+                if screen_pos is not None and pan_offset is not None:
+                    hit_handle = self.is_over_resize_handle(doc, screen_pos, pan_offset, zoom)
+                else:
+                    bx, by, bw, bh = bbox
+                    hit_handle = (abs(x - (bx + bw)) <= 1) and (abs(y - (by + bh)) <= 1)
+
+                if hit_handle:
+                    self.is_resizing = True
+                    self.initial_bbox = bbox
+                else:
+                    self.is_resizing = False
+                    self.initial_bbox = None
+            else:
+                self.is_resizing = False
+                self.initial_bbox = None
+        else:
+            self.is_resizing = False
+            self.initial_bbox = None
+
         if active and not active.locked and active.visible:
             self.initial_pixels = dict(active.pixels)
             if selection and not selection.is_empty():
@@ -63,6 +113,54 @@ class MoveTool(Tool):
         active = doc.active_layer
         if not active or active.locked or not active.visible:
             return False
+
+        if self.is_resizing and self.initial_bbox:
+            bx, by, bw, bh = self.initial_bbox
+            new_w = max(1, x - bx)
+            new_h = max(1, y - by)
+            if self.constrain_square:
+                side = max(1, max(new_w, new_h))
+                new_w = side
+                new_h = side
+
+            # Nearest-neighbor pixel scaling
+            new_pixels: Dict[str, str] = {}
+            for dx in range(new_w):
+                for dy in range(new_h):
+                    src_dx = int(dx * bw / new_w)
+                    src_dy = int(dy * bh / new_h)
+                    src_x = bx + src_dx
+                    src_y = by + src_dy
+                    color = self.initial_pixels.get(f"{src_x},{src_y}")
+                    if color:
+                        new_pixels[f"{bx + dx},{by + dy}"] = color
+            active.pixels = new_pixels
+
+            # Resample selection mask if active
+            if selection and self.initial_selection is not None:
+                new_sel = set()
+                for sx, sy in self.initial_selection:
+                    if bx <= sx < bx + bw and by <= sy < by + bh:
+                        rel_x = sx - bx
+                        rel_y = sy - by
+                        nx_start = int(rel_x * new_w / bw)
+                        nx_end = max(nx_start + 1, int((rel_x + 1) * new_w / bw))
+                        ny_start = int(rel_y * new_h / bh)
+                        ny_end = max(ny_start + 1, int((rel_y + 1) * new_h / bh))
+                        for nx in range(nx_start, nx_end):
+                            for ny in range(ny_start, ny_end):
+                                target_x = bx + nx
+                                target_y = by + ny
+                                if doc.is_valid_coord(target_x, target_y):
+                                    new_sel.add((target_x, target_y))
+                    else:
+                        dx_shift = x - self.drag_start[0]
+                        dy_shift = y - self.drag_start[1]
+                        if doc.is_valid_coord(sx + dx_shift, sy + dy_shift):
+                            new_sel.add((sx + dx_shift, sy + dy_shift))
+                selection.selected = new_sel
+
+            return True
 
         dx = x - self.drag_start[0]
         dy = y - self.drag_start[1]
@@ -101,6 +199,8 @@ class MoveTool(Tool):
     ) -> bool:
         was_drawing = self.is_drawing
         self.is_drawing = False
+        self.is_resizing = False
+        self.initial_bbox = None
         self.drag_start = None
         self.initial_pixels = {}
         self.initial_selection = None
@@ -130,3 +230,4 @@ class MoveTool(Tool):
             selection.selected = new_sel
 
         return True
+

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDockWidget,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -22,7 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from coopixel.models.document import PixelDocument
-from coopixel.models.effects import StrokeEffect
+from coopixel.models.effects import HueSaturationContrastEffect, StrokeEffect
+
 
 
 def _qcolor_from_hex(hex_str: str) -> QColor:
@@ -172,6 +174,115 @@ class StrokeEffectWidget(QFrame):
             self.delete_requested.emit()
 
 
+class HueSatContrastEffectWidget(QFrame):
+    """Widget control box for configuring a HueSaturationContrastEffect instance."""
+
+    changed = Signal()
+    delete_requested = Signal()
+
+    def __init__(self, effect: HueSaturationContrastEffect, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.effect = effect
+        self.setStyleSheet("QFrame { background: #282828; border: 1px solid #333333; border-radius: 6px; }")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
+
+        # Header with Enable Checkbox, Reset Button, Delete Button
+        header = QHBoxLayout()
+        header.setSpacing(4)
+
+        self.enable_cb = QCheckBox("Hue / Sat / Contrast")
+        self.enable_cb.setChecked(effect.enabled)
+        self.enable_cb.setStyleSheet("font-weight: 600; color: #F1F5F9;")
+        self.enable_cb.toggled.connect(self._on_enable_toggled)
+
+        self.reset_btn = QPushButton("↺")
+        self.reset_btn.setToolTip("Reset modifier sliders to 0")
+        self.reset_btn.setFixedSize(22, 22)
+        self.reset_btn.setObjectName("secondaryButton")
+        self.reset_btn.clicked.connect(self._reset_values)
+
+        self.del_btn = QPushButton("🗑️ Remove")
+        self.del_btn.setToolTip("Remove Effect from Active Layer")
+        self.del_btn.setObjectName("secondaryButton")
+        self.del_btn.setStyleSheet(
+            "QPushButton#secondaryButton { background-color: #282828; color: #EF4444; border: 1px solid #333333; padding: 2px 8px; font-size: 10px; font-weight: bold; }"
+            "QPushButton#secondaryButton:hover { background-color: #3F1D1D; border-color: #EF4444; color: #FFFFFF; }"
+        )
+        self.del_btn.clicked.connect(self.delete_requested.emit)
+
+        header.addWidget(self.enable_cb)
+        header.addStretch(1)
+        header.addWidget(self.reset_btn)
+        header.addWidget(self.del_btn)
+        layout.addLayout(header)
+
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+
+        # Controls Grid
+        props_widget = QWidget()
+        props_layout = QFormLayout(props_widget)
+        props_layout.setContentsMargins(4, 0, 4, 2)
+        props_layout.setSpacing(6)
+
+        # 1. Hue SpinBox (-180 to +180 deg)
+        self.hue_spin = QSpinBox()
+        self.hue_spin.setRange(-180, 180)
+        self.hue_spin.setValue(effect.hue)
+        self.hue_spin.setSuffix("°")
+        self.hue_spin.valueChanged.connect(self._on_hue_changed)
+
+        # 2. Saturation SpinBox (-100 to +100 %)
+        self.sat_spin = QSpinBox()
+        self.sat_spin.setRange(-100, 100)
+        self.sat_spin.setValue(effect.saturation)
+        self.sat_spin.setSuffix("%")
+        self.sat_spin.valueChanged.connect(self._on_sat_changed)
+
+        # 3. Contrast SpinBox (-100 to +100 %)
+        self.contrast_spin = QSpinBox()
+        self.contrast_spin.setRange(-100, 100)
+        self.contrast_spin.setValue(effect.contrast)
+        self.contrast_spin.setSuffix("%")
+        self.contrast_spin.valueChanged.connect(self._on_contrast_changed)
+
+        props_layout.addRow("Hue:", self.hue_spin)
+        props_layout.addRow("Saturation:", self.sat_spin)
+        props_layout.addRow("Contrast:", self.contrast_spin)
+        layout.addWidget(props_widget)
+
+    def _on_enable_toggled(self, checked: bool) -> None:
+        self.effect.enabled = checked
+        self.changed.emit()
+
+    def _on_hue_changed(self, val: int) -> None:
+        self.effect.hue = val
+        self.changed.emit()
+
+    def _on_sat_changed(self, val: int) -> None:
+        self.effect.saturation = val
+        self.changed.emit()
+
+    def _on_contrast_changed(self, val: int) -> None:
+        self.effect.contrast = val
+        self.changed.emit()
+
+    def _reset_values(self) -> None:
+        self.hue_spin.setValue(0)
+        self.sat_spin.setValue(0)
+        self.contrast_spin.setValue(0)
+
+    def _on_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        del_act = menu.addAction("🗑️ Remove Effect")
+        action = menu.exec_(self.mapToGlobal(pos)) if hasattr(menu, 'exec_') else menu.exec(self.mapToGlobal(pos))
+        if action == del_act:
+            self.delete_requested.emit()
+
+
 class AppearancePanel(QDockWidget):
     """Dock panel for managing active layer effects."""
 
@@ -247,15 +358,23 @@ class AppearancePanel(QDockWidget):
                 w.changed.connect(self.effect_changed.emit)
                 w.delete_requested.connect(lambda *args, eff=effect: self.remove_effect_object(eff))
                 self.effects_layout.addWidget(w)
+            elif isinstance(effect, HueSaturationContrastEffect):
+                w = HueSatContrastEffectWidget(effect, self)
+                w.changed.connect(self.effect_changed.emit)
+                w.delete_requested.connect(lambda *args, eff=effect: self.remove_effect_object(eff))
+                self.effects_layout.addWidget(w)
 
         self.effects_layout.addStretch(1)
 
     def _show_add_effect_menu(self) -> None:
         menu = QMenu(self)
         stroke_action = menu.addAction("🎨 Stroke (Outline)")
+        hsc_action = menu.addAction("🌈 Hue / Saturation / Contrast")
         action = menu.exec(self.add_btn.mapToGlobal(self.add_btn.rect().bottomLeft()))
         if action == stroke_action:
             self.add_stroke_effect()
+        elif action == hsc_action:
+            self.add_hue_sat_contrast_effect()
 
     def add_stroke_effect(self) -> None:
         active = self.doc.active_layer
@@ -264,10 +383,18 @@ class AppearancePanel(QDockWidget):
             self.refresh_panel()
             self.effect_changed.emit()
 
-    def remove_effect_object(self, effect: StrokeEffect) -> None:
+    def add_hue_sat_contrast_effect(self) -> None:
+        active = self.doc.active_layer
+        if active:
+            active.effects.append(HueSaturationContrastEffect(enabled=True, hue=0, saturation=0, contrast=0))
+            self.refresh_panel()
+            self.effect_changed.emit()
+
+    def remove_effect_object(self, effect) -> None:
         """Removes a specific layer effect instance from the active layer."""
         active = self.doc.active_layer
         if active and effect in active.effects:
             active.effects.remove(effect)
             self.refresh_panel()
             self.effect_changed.emit()
+
