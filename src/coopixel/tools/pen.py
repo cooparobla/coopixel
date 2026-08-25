@@ -75,11 +75,17 @@ class PenTool(Tool):
 
         # Ensure document has an active path
         if not doc.active_path:
-            doc.add_path()
+            doc.add_path(stroke_color=primary_color, fill_color=primary_color)
 
         path = doc.active_path
         if not path:
             return False
+
+        # Assign primary selected color when starting a stroke / path
+        if len(path.anchors) == 0 and primary_color:
+            path.stroke_color = primary_color
+            path.fill_color = primary_color
+
 
         fx, fy = float(x), float(y)
         target_idx, target_type = self._find_target(path, fx, fy)

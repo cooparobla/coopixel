@@ -15,8 +15,9 @@ class ColorPickerTool(Tool):
         super().__init__()
         self.on_color_picked = on_color_picked
 
-    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
-        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
+        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
+
 
         if not doc.is_valid_coord(x, y):
             return False

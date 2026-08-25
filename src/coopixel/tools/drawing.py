@@ -82,8 +82,8 @@ class PencilTool(Tool):
     name = "pencil"
     display_name = "Pencil"
 
-    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
-        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
+        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         layer = doc.active_layer
         if not layer or layer.locked or not layer.visible:
             return False
@@ -95,7 +95,7 @@ class PencilTool(Tool):
                 changed = True
         return changed
 
-    def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
+    def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         if not self.is_drawing:
             return False
         layer = doc.active_layer
@@ -119,8 +119,8 @@ class EraserTool(Tool):
     name = "eraser"
     display_name = "Eraser"
 
-    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
-        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
+        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         layer = doc.active_layer
         if not layer or layer.locked or not layer.visible:
             return False
@@ -132,7 +132,7 @@ class EraserTool(Tool):
                 changed = True
         return changed
 
-    def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
+    def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         if not self.is_drawing:
             return False
         layer = doc.active_layer
@@ -165,8 +165,8 @@ class BucketFillTool(Tool):
         super().__init__()
         self.fill_mode: str = self.CONTIGUOUS
 
-    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
-        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
+        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         layer = doc.active_layer
         if not layer or layer.locked or not layer.visible or not doc.is_valid_coord(x, y):
             return False
@@ -187,6 +187,7 @@ class BucketFillTool(Tool):
                 changed = True
 
         return changed
+
 
 
 class DrawTool(Tool):
@@ -230,9 +231,11 @@ class DrawTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection=None,
+        *args,
+        **kwargs,
     ) -> bool:
         self.is_drawing = True
-        return self.active_sub_tool.mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+        return self.active_sub_tool.mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
 
     def mouse_move(
         self,
@@ -244,8 +247,10 @@ class DrawTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection=None,
+        *args,
+        **kwargs,
     ) -> bool:
-        return self.active_sub_tool.mouse_move(doc, x, y, primary_color, secondary_color, size, filled, selection)
+        return self.active_sub_tool.mouse_move(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
 
     def mouse_release(
         self,
@@ -257,9 +262,12 @@ class DrawTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection=None,
+        *args,
+        **kwargs,
     ) -> bool:
         self.is_drawing = False
-        return self.active_sub_tool.mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection)
+        return self.active_sub_tool.mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
+
 
     def get_preview_pixels(
         self,

@@ -385,6 +385,8 @@ class PixelDocument:
         self.active_animation_index: int = 0
         self.paths: List[VectorPath] = []
         self.active_path_index: Optional[int] = None
+        self.primary_color: str = "#F97316FF"
+
 
         # Every new file MUST have at least one animation named "new-animation"
         self.animations.append(Animation("new-animation"))
@@ -395,17 +397,38 @@ class PixelDocument:
             return self.paths[self.active_path_index]
         return None
 
-    def add_path(self, name: Optional[str] = None, layer_id: str = "", frame_index: Optional[int] = None) -> VectorPath:
+    def add_path(
+        self,
+        name: Optional[str] = None,
+        layer_id: str = "",
+        frame_index: Optional[int] = None,
+        stroke_color: Optional[str] = None,
+        fill_color: Optional[str] = None,
+    ) -> VectorPath:
         if name is None:
             name = f"Path {len(self.paths) + 1}"
         if not layer_id and self.active_layer:
             layer_id = self.active_layer.name
         if frame_index is None:
             frame_index = getattr(self, "active_frame_index", 0)
-        vp = VectorPath(name=name, layer_id=layer_id, frame_index=frame_index)
+
+        primary = getattr(self, "primary_color", "#F97316FF")
+        if stroke_color is None:
+            stroke_color = primary
+        if fill_color is None:
+            fill_color = primary
+
+        vp = VectorPath(
+            name=name,
+            layer_id=layer_id,
+            frame_index=frame_index,
+            stroke_color=stroke_color,
+            fill_color=fill_color,
+        )
         self.paths.append(vp)
         self.active_path_index = len(self.paths) - 1
         return vp
+
 
 
     def remove_path(self, index: int) -> bool:

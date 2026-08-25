@@ -171,6 +171,8 @@ class MainWindow(QMainWindow):
         # Sync initial colors
         self.canvas.primary_color = self.color_panel.primary_color
         self.canvas.secondary_color = self.color_panel.secondary_color
+        self.doc.primary_color = self.color_panel.primary_color
+
 
         # ---- Right-hand Vertical Icon Toolbar ----
         self._build_right_sidebar_toolbar()
@@ -399,10 +401,16 @@ class MainWindow(QMainWindow):
         sel_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("selection"))
         self.addAction(sel_tool_act)
 
-        pencil_tool_act = QAction("Pencil Tool", self)
-        pencil_tool_act.setShortcut(QKeySequence("P"))
+        pencil_tool_act = QAction("Draw Tool", self)
+        pencil_tool_act.setShortcut(QKeySequence("D"))
         pencil_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pencil"))
         self.addAction(pencil_tool_act)
+
+        pen_tool_act = QAction("Pen Tool", self)
+        pen_tool_act.setShortcut(QKeySequence("P"))
+        pen_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pen"))
+        self.addAction(pen_tool_act)
+
 
         eraser_tool_act = QAction("Eraser Tool", self)
         eraser_tool_act.setShortcut(QKeySequence("E"))
@@ -577,13 +585,15 @@ class MainWindow(QMainWindow):
         # ---- TOOLS ----
         tools_menu = menu_bar.addMenu("&Tools")
         tools_menu.addAction("Selection Tool (S)", lambda: self.tool_panel.select_tool_by_key("selection"))
-        tools_menu.addAction("Pencil Tool (P)", lambda: self.tool_panel.select_tool_by_key("pencil"))
+        tools_menu.addAction("Draw Tool (D)", lambda: self.tool_panel.select_tool_by_key("pencil"))
+        tools_menu.addAction("Pen Tool (P)", lambda: self.tool_panel.select_tool_by_key("pen"))
         tools_menu.addAction("Eraser Tool (E)", lambda: self.tool_panel.select_tool_by_key("eraser"))
         tools_menu.addAction("Color Picker (I)", lambda: self.tool_panel.select_tool_by_key("picker"))
         tools_menu.addAction("Bucket Fill (F)", lambda: self.tool_panel.select_tool_by_key("fill"))
         tools_menu.addAction("Line Tool (L)", lambda: self.tool_panel.select_tool_by_key("line"))
         tools_menu.addAction("Rectangle Tool (R)", lambda: self.tool_panel.select_tool_by_key("rectangle"))
         tools_menu.addAction("Circle Tool (C)", lambda: self.tool_panel.select_tool_by_key("circle"))
+
 
         # ---- WINDOW ----
         window_menu = menu_bar.addMenu("&Window")
@@ -923,6 +933,9 @@ class MainWindow(QMainWindow):
 
     def on_primary_color_changed(self, color_hex: str) -> None:
         self.canvas.primary_color = color_hex
+        if hasattr(self, "doc") and self.doc:
+            self.doc.primary_color = color_hex
+
 
     def on_secondary_color_changed(self, color_hex: str) -> None:
         self.canvas.secondary_color = color_hex

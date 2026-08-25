@@ -100,13 +100,14 @@ class ToolPanel(QFrame):
         tool_defs = [
             ("move",      "🖐️", "Move Tool (V)"),
             ("selection", "🔲", "Selection Tool (S)"),
-            ("draw",      "✏️", "Draw Tool (P)"),
-            ("pen",       "🖋️", "Pen Tool (N): Vector paths & Bezier curves"),
+            ("draw",      "✏️", "Draw Tool (D)"),
+            ("pen",       "🖋️", "Pen Tool (P): Vector paths & Bezier curves"),
             ("eraser",    "🧹", "Eraser Tool (E)"),
             ("picker",    "🧪", "Color Picker (I)"),
             ("fill",      "🪣", "Bucket Fill Tool (F)"),
             ("crop",      "✂️", "Crop Tool (K)"),
         ]
+
 
         self._tool_order = [k for k, _, _ in tool_defs]
 

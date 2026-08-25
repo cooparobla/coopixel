@@ -125,14 +125,29 @@ def test_path_panel_ui():
 
     assert panel.list_widget.count() == 1
 
-    # Test PathItemWidget dynamic stroke/fill toggle buttons
+    # Test PathItemWidget collapsible options drawer & variables
     item_widget = panel.list_widget.itemWidget(panel.list_widget.item(0))
     assert isinstance(item_widget, PathItemWidget)
     assert item_widget.stroke_btn.isChecked() is True
-    assert item_widget.fill_btn.isChecked() is False
+    assert item_widget.options_container.isHidden() is True  # Defaults to COLLAPSED
+
+    item_widget._toggle_expand()
+    assert item_widget.options_container.isHidden() is False  # Expanded
+
+    item_widget.stroke_spin.setValue(5)
+    assert doc.paths[0].stroke_width == 5
+
+    doc.primary_color = "#00FF00FF"
+    item_widget._set_stroke_to_primary()
+    assert doc.paths[0].stroke_color == "#00FF00FF"
+
+    item_widget._set_fill_to_primary()
+    assert doc.paths[0].fill_color == "#00FF00FF"
 
     item_widget.fill_btn.setChecked(True)
     assert doc.paths[0].filled is True
+
+
 
     panel.on_add_path()
     assert panel.list_widget.count() == 2

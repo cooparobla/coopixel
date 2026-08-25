@@ -2,7 +2,8 @@
 Base Tool interface for Coopixel drawing tools.
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
 from coopixel.models.document import PixelDocument
 
 if TYPE_CHECKING:
@@ -39,9 +40,9 @@ class Tool:
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
-        shift_pressed: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
-
         """Called when mouse press occurs on canvas. Returns True if document was modified."""
         self.is_drawing = True
         self.start_x = x
@@ -60,8 +61,10 @@ class Tool:
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
-        """Called when mouse moves while dragging. Returns True if document was modified."""
+        """Called when mouse drags across canvas."""
         self.last_x = x
         self.last_y = y
         return False
@@ -76,12 +79,15 @@ class Tool:
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
-        """Called when mouse release occurs. Returns True if document was modified."""
+        """Called when mouse button is released."""
+        was_drawing = self.is_drawing
         self.is_drawing = False
         self.last_x = x
         self.last_y = y
-        return False
+        return was_drawing
 
     def get_preview_pixels(
         self,
