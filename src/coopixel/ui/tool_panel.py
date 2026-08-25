@@ -54,6 +54,8 @@ class ToolPanel(QFrame):
     crop_cancel_requested = Signal()
     crop_fit_sel_requested = Signal()
     crop_fit_content_requested = Signal()
+    # Emitted when user edits W or H spinboxes in the crop context panel
+    crop_wh_changed = Signal(int, int)
     selection_cleared = Signal()
     move_nudge_requested = Signal(int, int)
 
@@ -90,13 +92,13 @@ class ToolPanel(QFrame):
         }
 
         tool_defs = [
-            ("crop",      "✂️", "Crop Tool (K)"),
             ("move",      "🖐️", "Move Tool (V)"),
             ("selection", "🔲", "Selection Tool (S)"),
             ("draw",      "✏️", "Draw Tool (P)"),
             ("eraser",    "🧹", "Eraser Tool (E)"),
             ("picker",    "🧪", "Color Picker (I)"),
             ("fill",      "🪣", "Bucket Fill Tool (F)"),
+            ("crop",      "✂️", "Crop Tool (K)"),
         ]
         self._tool_order = [k for k, _, _ in tool_defs]
 
@@ -276,6 +278,41 @@ class ToolPanel(QFrame):
         fit_content_btn.clicked.connect(self.crop_fit_content_requested.emit)
         crop_layout.addWidget(fit_content_btn)
 
+        # W / H spinboxes for precise numeric editing
+        crop_layout.addWidget(_vline())
+
+        w_lbl = QLabel("W:")
+        w_lbl.setStyleSheet("color: #94A3B8;")
+        crop_layout.addWidget(w_lbl)
+        self.crop_w_spin = QSpinBox()
+        self.crop_w_spin.setRange(1, 32767)
+        self.crop_w_spin.setValue(1)
+        self.crop_w_spin.setSuffix(" px")
+        self.crop_w_spin.setToolTip("Crop box width (edit to resize)")
+        self.crop_w_spin.setStyleSheet(
+            "QSpinBox { background: #1E293B; border: 1px solid #334155; color: #F8FAFC; "
+            "padding: 2px 4px; border-radius: 3px; min-width: 68px; }"
+        )
+        crop_layout.addWidget(self.crop_w_spin)
+
+        h_lbl = QLabel("H:")
+        h_lbl.setStyleSheet("color: #94A3B8;")
+        crop_layout.addWidget(h_lbl)
+        self.crop_h_spin = QSpinBox()
+        self.crop_h_spin.setRange(1, 32767)
+        self.crop_h_spin.setValue(1)
+        self.crop_h_spin.setSuffix(" px")
+        self.crop_h_spin.setToolTip("Crop box height (edit to resize)")
+        self.crop_h_spin.setStyleSheet(
+            "QSpinBox { background: #1E293B; border: 1px solid #334155; color: #F8FAFC; "
+            "padding: 2px 4px; border-radius: 3px; min-width: 68px; }"
+        )
+        crop_layout.addWidget(self.crop_h_spin)
+
+        # Wire spinboxes — both emit crop_wh_changed together
+        self.crop_w_spin.valueChanged.connect(self._on_crop_spin_changed)
+        self.crop_h_spin.valueChanged.connect(self._on_crop_spin_changed)
+
         crop_layout.addStretch(1)
         self.ctx_stack.addWidget(crop_widget)
 
@@ -391,6 +428,20 @@ class ToolPanel(QFrame):
 
     def _on_fill_mode(self, mode: str) -> None:
         self.fill_tool.fill_mode = mode
+
+    def _on_crop_spin_changed(self) -> None:
+        """Emitted when the user edits W or H spinboxes directly."""
+        self.crop_wh_changed.emit(self.crop_w_spin.value(), self.crop_h_spin.value())
+
+    def update_crop_box_ui(self, x: int, y: int, w: int, h: int) -> None:
+        """Called by MainWindow when the canvas crop box changes (drag or Fit buttons)."""
+        # Block signals to avoid triggering crop_wh_changed during programmatic update
+        self.crop_w_spin.blockSignals(True)
+        self.crop_h_spin.blockSignals(True)
+        self.crop_w_spin.setValue(w)
+        self.crop_h_spin.setValue(h)
+        self.crop_w_spin.blockSignals(False)
+        self.crop_h_spin.blockSignals(False)
 
     def _on_clear_selection(self) -> None:
         if self._canvas_selection is not None:

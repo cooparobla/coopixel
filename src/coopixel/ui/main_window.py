@@ -6,10 +6,12 @@ Integrates dark theme, standard photo editor menu bar, tool toolbar, canvas view
 import os
 from typing import Optional, Tuple
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPainter
+from PySide6.QtGui import QAction, QColor, QIcon, QImage, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
+    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QScrollArea,
@@ -35,6 +37,12 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("Coopixel - Pixel Art Editor")
         self.resize(1280, 820)
+
+        # Set window icon
+        pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(pkg_dir, "icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         # ---- Document & History ----
         self.doc: PixelDocument = PixelDocument(32, 32)
@@ -66,10 +74,12 @@ class MainWindow(QMainWindow):
         self.tool_panel.crop_cancel_requested.connect(self.on_crop_tool_cancel_requested)
         self.tool_panel.crop_fit_sel_requested.connect(self.on_crop_tool_fit_sel_requested)
         self.tool_panel.crop_fit_content_requested.connect(self.on_crop_tool_fit_content_requested)
+        self.tool_panel.crop_wh_changed.connect(self.on_crop_wh_changed)
         self.tool_panel.selection_cleared.connect(self.on_selection_committed)
         self.tool_panel.move_nudge_requested.connect(self.on_move_nudge_requested)
 
         self.canvas.crop_committed.connect(self.on_crop_committed)
+        self.canvas.crop_box_changed.connect(self.tool_panel.update_crop_box_ui)
         self.canvas.selection_committed.connect(self.on_selection_committed)
 
         # Set default tool to Pencil
@@ -127,6 +137,7 @@ class MainWindow(QMainWindow):
         # ---- Status Bar ----
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self._build_status_bar_view_options()
 
         # ---- Menu Bar ----
         self._build_menu_bar()
@@ -291,6 +302,21 @@ class MainWindow(QMainWindow):
         # ---- IMAGE ----
         image_menu = menu_bar.addMenu("&Image")
 
+        crop_dialog_act = QAction("&Crop Canvas...", self)
+        crop_dialog_act.setShortcut(QKeySequence("Ctrl+Shift+X"))
+        crop_dialog_act.triggered.connect(self.on_crop_canvas_dialog)
+        image_menu.addAction(crop_dialog_act)
+
+        crop_sel_act = QAction("Crop Canvas to &Selection", self)
+        crop_sel_act.triggered.connect(self.on_crop_to_selection)
+        image_menu.addAction(crop_sel_act)
+
+        crop_content_act = QAction("&Trim Canvas to Content", self)
+        crop_content_act.triggered.connect(self.on_crop_to_content)
+        image_menu.addAction(crop_content_act)
+
+        image_menu.addSeparator()
+
         img_canvas_size_act = QAction("Canvas Size...", self)
         img_canvas_size_act.triggered.connect(self.on_change_canvas_size)
         image_menu.addAction(img_canvas_size_act)
@@ -365,12 +391,18 @@ class MainWindow(QMainWindow):
 
         view_menu.addSeparator()
 
-        grid_act = QAction("Toggle &Grid", self)
-        grid_act.setCheckable(True)
-        grid_act.setChecked(True)
-        grid_act.setShortcut(QKeySequence("Ctrl+G"))
-        grid_act.triggered.connect(self.canvas.toggle_grid)
-        view_menu.addAction(grid_act)
+        self.grid_act = QAction("Toggle &Grid", self)
+        self.grid_act.setCheckable(True)
+        self.grid_act.setChecked(True)
+        self.grid_act.setShortcut(QKeySequence("Ctrl+G"))
+        self.grid_act.triggered.connect(self._on_toggle_grid_clicked)
+        view_menu.addAction(self.grid_act)
+
+        self.border_act = QAction("Toggle Canvas &Border Outline", self)
+        self.border_act.setCheckable(True)
+        self.border_act.setChecked(True)
+        self.border_act.triggered.connect(self._on_toggle_border_clicked)
+        view_menu.addAction(self.border_act)
 
         view_menu.addSeparator()
 
@@ -428,6 +460,35 @@ class MainWindow(QMainWindow):
         move_down_act.triggered.connect(self.layer_panel.on_move_down)
         layer_menu.addAction(move_down_act)
 
+        layer_menu.addSeparator()
+
+        crop_l_act = QAction("Crop Layer to &Canvas", self)
+        crop_l_act.setToolTip("Removes any pixel data in the active layer outside current canvas dimensions")
+        crop_l_act.triggered.connect(self.layer_panel.on_crop_layer_to_canvas)
+        layer_menu.addAction(crop_l_act)
+
+        # ---- ANIMATION ----
+        anim_menu = menu_bar.addMenu("&Animation")
+
+        play_act = QAction("&Play / Pause Animation", self)
+        play_act.setShortcut(QKeySequence(Qt.Key_Space))
+        play_act.triggered.connect(self.animation_panel.toggle_play)
+        anim_menu.addAction(play_act)
+
+        anim_menu.addSeparator()
+
+        add_frame_act = QAction("&Add New Frame", self)
+        add_frame_act.triggered.connect(self.animation_panel.on_add_frame)
+        anim_menu.addAction(add_frame_act)
+
+        dup_frame_act = QAction("&Duplicate Active Frame", self)
+        dup_frame_act.triggered.connect(self.animation_panel.on_duplicate_frame)
+        anim_menu.addAction(dup_frame_act)
+
+        del_frame_act = QAction("&Delete Active Frame", self)
+        del_frame_act.triggered.connect(self.animation_panel.on_delete_frame)
+        anim_menu.addAction(del_frame_act)
+
         # ---- TOOLS ----
         tools_menu = menu_bar.addMenu("&Tools")
         tools_menu.addAction("Selection Tool (S)", lambda: self.tool_panel.select_tool_by_key("selection"))
@@ -438,6 +499,34 @@ class MainWindow(QMainWindow):
         tools_menu.addAction("Line Tool (L)", lambda: self.tool_panel.select_tool_by_key("line"))
         tools_menu.addAction("Rectangle Tool (R)", lambda: self.tool_panel.select_tool_by_key("rectangle"))
         tools_menu.addAction("Circle Tool (C)", lambda: self.tool_panel.select_tool_by_key("circle"))
+
+        # ---- WINDOW ----
+        window_menu = menu_bar.addMenu("&Window")
+
+        self.show_bounds_act = QAction("Show &Active Layer Content Bounds", self)
+        self.show_bounds_act.setCheckable(True)
+        self.show_bounds_act.setChecked(True)
+        self.show_bounds_act.setShortcut(QKeySequence("Ctrl+Shift+B"))
+        self.show_bounds_act.triggered.connect(self._on_toggle_bounds_clicked)
+        window_menu.addAction(self.show_bounds_act)
+
+        window_menu.addSeparator()
+
+        w_layers_act = self.layer_panel.toggleViewAction()
+        w_layers_act.setText("Layers Panel")
+        window_menu.addAction(w_layers_act)
+
+        w_colors_act = self.color_panel.toggleViewAction()
+        w_colors_act.setText("Color Panel")
+        window_menu.addAction(w_colors_act)
+
+        w_app_act = self.appearance_panel.toggleViewAction()
+        w_app_act.setText("Appearance & Layer Effects Panel")
+        window_menu.addAction(w_app_act)
+
+        w_anim_act = self.animation_panel.toggleViewAction()
+        w_anim_act.setText("Animation Timeline Panel")
+        window_menu.addAction(w_anim_act)
 
         # ---- HELP ----
         help_menu = menu_bar.addMenu("&Help")
@@ -454,6 +543,77 @@ class MainWindow(QMainWindow):
         self.canvas.zoom_level = 16.0
         self.canvas.center_canvas()
         self.canvas.update()
+
+    def _on_toggle_grid_clicked(self) -> None:
+        self.canvas.toggle_grid()
+        if hasattr(self, "view_btn_grid"):
+            self.view_btn_grid.setChecked(self.canvas.show_grid)
+        if hasattr(self, "grid_act"):
+            self.grid_act.setChecked(self.canvas.show_grid)
+
+    def _on_toggle_border_clicked(self) -> None:
+        self.canvas.toggle_canvas_border()
+        if hasattr(self, "view_btn_border"):
+            self.view_btn_border.setChecked(self.canvas.show_canvas_border)
+        if hasattr(self, "border_act"):
+            self.border_act.setChecked(self.canvas.show_canvas_border)
+
+    def _on_toggle_bounds_clicked(self) -> None:
+        self.canvas.toggle_layer_bounds()
+        if hasattr(self, "view_btn_bounds"):
+            self.view_btn_bounds.setChecked(self.canvas.show_layer_bounds)
+        if hasattr(self, "show_bounds_act"):
+            self.show_bounds_act.setChecked(self.canvas.show_layer_bounds)
+
+    def _build_status_bar_view_options(self) -> None:
+        """Adds 2D viewer option buttons (Grid, Canvas Border, Layer Bounds, Reset View) to the bottom-right of the status bar."""
+        options_widget = QWidget()
+        layout = QHBoxLayout(options_widget)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(4)
+
+        btn_style = (
+            "QToolButton { background: #242424; border: 1px solid #383838; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #E2E8F0; }"
+            "QToolButton:hover { background: #332B25; border-color: #F97316; color: #FFFFFF; }"
+            "QToolButton:checked { background: #2E2620; border-color: #F97316; color: #F97316; font-weight: bold; }"
+        )
+
+        self.view_btn_grid = QToolButton()
+        self.view_btn_grid.setText("🌐")
+        self.view_btn_grid.setToolTip("Toggle Pixel Grid (Ctrl+G)")
+        self.view_btn_grid.setCheckable(True)
+        self.view_btn_grid.setChecked(self.canvas.show_grid)
+        self.view_btn_grid.setStyleSheet(btn_style)
+        self.view_btn_grid.clicked.connect(self._on_toggle_grid_clicked)
+
+        self.view_btn_border = QToolButton()
+        self.view_btn_border.setText("🖼️")
+        self.view_btn_border.setToolTip("Toggle Canvas Border Outline")
+        self.view_btn_border.setCheckable(True)
+        self.view_btn_border.setChecked(self.canvas.show_canvas_border)
+        self.view_btn_border.setStyleSheet(btn_style)
+        self.view_btn_border.clicked.connect(self._on_toggle_border_clicked)
+
+        self.view_btn_bounds = QToolButton()
+        self.view_btn_bounds.setText("📐")
+        self.view_btn_bounds.setToolTip("Toggle Active Layer Content Bounds (Ctrl+Shift+B)")
+        self.view_btn_bounds.setCheckable(True)
+        self.view_btn_bounds.setChecked(self.canvas.show_layer_bounds)
+        self.view_btn_bounds.setStyleSheet(btn_style)
+        self.view_btn_bounds.clicked.connect(self._on_toggle_bounds_clicked)
+
+        self.view_btn_reset = QToolButton()
+        self.view_btn_reset.setText("🎯")
+        self.view_btn_reset.setToolTip("Reset View (Zoom 16x & Center Canvas, Ctrl+0)")
+        self.view_btn_reset.setStyleSheet(btn_style)
+        self.view_btn_reset.clicked.connect(self._reset_view)
+
+        layout.addWidget(self.view_btn_grid)
+        layout.addWidget(self.view_btn_border)
+        layout.addWidget(self.view_btn_bounds)
+        layout.addWidget(self.view_btn_reset)
+
+        self.status_bar.addPermanentWidget(options_widget)
 
     def _push_history(self) -> None:
         """Push current document state and selection state to the history stack."""
@@ -483,6 +643,7 @@ class MainWindow(QMainWindow):
         else:
             self.canvas.selection.clear()
 
+        self.canvas.invalidate_cache()
         self.canvas.update()
         self.layer_panel.set_document(self.doc)
         self.appearance_panel.set_document(self.doc)
@@ -505,6 +666,7 @@ class MainWindow(QMainWindow):
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
         self.tag_panel.refresh_tags()
+        self.canvas.invalidate_cache()
         self.canvas.update()
 
     def on_layer_structure_changed(self) -> None:
@@ -513,6 +675,7 @@ class MainWindow(QMainWindow):
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
         self.tag_panel.refresh_tags()
+        self.canvas.invalidate_cache()
         self.canvas.update()
 
     def on_layer_visual_changed(self) -> None:
@@ -520,6 +683,7 @@ class MainWindow(QMainWindow):
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
         self.tag_panel.refresh_tags()
+        self.canvas.invalidate_cache()
         self.canvas.update()
 
     def on_tag_visibility_changed(self) -> None:
@@ -533,14 +697,17 @@ class MainWindow(QMainWindow):
     def on_frame_structure_changed(self) -> None:
         """Called when frames are added/deleted/duplicated/reordered — push history."""
         self._push_history()
+        self.canvas.invalidate_cache()
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
         self.canvas.update()
 
     def on_active_frame_changed(self) -> None:
         """Called when active frame is changed — updates layer panel, appearance panel & canvas."""
+        self.canvas.invalidate_cache()
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
+        self.tag_panel.refresh_tags()
         self.canvas.update()
 
     def on_undo(self) -> None:
@@ -626,6 +793,30 @@ class MainWindow(QMainWindow):
         else:
             return 0, 0
 
+    def on_crop_canvas_dialog(self) -> None:
+        sel_bbox = self.doc.get_selection_bbox(self.canvas.selection.selected)
+        content_bbox = self.doc.get_content_bbox()
+        dlg = CropCanvasDialog(self.doc.width, self.doc.height, selection_bbox=sel_bbox, content_bbox=content_bbox, parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            x, y, w, h = dlg.get_values()
+            self.on_crop_committed(x, y, w, h)
+
+    def on_crop_to_selection(self) -> None:
+        sel_bbox = self.doc.get_selection_bbox(self.canvas.selection.selected)
+        if sel_bbox:
+            x, y, w, h = sel_bbox
+            self.on_crop_committed(x, y, w, h)
+        else:
+            self.status_bar.showMessage("No active selection to crop to", 2000)
+
+    def on_crop_to_content(self) -> None:
+        content_bbox = self.doc.get_content_bbox()
+        if content_bbox:
+            x, y, w, h = content_bbox
+            self.on_crop_committed(x, y, w, h)
+        else:
+            self.status_bar.showMessage("No pixel content found to crop to", 2000)
+
     def on_crop_committed(self, x: int, y: int, w: int, h: int) -> None:
         if w <= 0 or h <= 0:
             return
@@ -675,6 +866,7 @@ class MainWindow(QMainWindow):
             if sel_bbox:
                 x, y, w, h = sel_bbox
                 crop_tool.set_box(x, y, w, h)
+                self.tool_panel.update_crop_box_ui(x, y, w, h)
                 self.canvas.update()
                 self.status_bar.showMessage(f"Set crop box to selection ({w}×{h} px)", 1500)
             else:
@@ -687,10 +879,20 @@ class MainWindow(QMainWindow):
             if content_bbox:
                 x, y, w, h = content_bbox
                 crop_tool.set_box(x, y, w, h)
+                self.tool_panel.update_crop_box_ui(x, y, w, h)
                 self.canvas.update()
                 self.status_bar.showMessage(f"Set crop box to content ({w}×{h} px)", 1500)
             else:
                 self.status_bar.showMessage("No content found", 1500)
+
+    def on_crop_wh_changed(self, w: int, h: int) -> None:
+        """User edited the W or H spinbox — apply to existing crop box origin."""
+        crop_tool = getattr(self.tool_panel, "crop_tool", None)
+        if crop_tool and crop_tool.crop_box:
+            crop_tool.set_box_wh(w, h)
+            self.canvas.update()
+            x, y, _w, _h = crop_tool.crop_box
+            self.status_bar.showMessage(f"Crop box resized to {w}×{h} px", 1000)
 
     def on_move_nudge_requested(self, dx: int, dy: int) -> None:
         move_tool = getattr(self.tool_panel, "move_tool", None)
@@ -948,6 +1150,7 @@ class MainWindow(QMainWindow):
                     )
                     if layer:
                         self._push_history()
+                        self.canvas.invalidate_cache()
                         self.canvas.center_canvas()
                         self.canvas.update()
                         self.layer_panel.refresh_list()

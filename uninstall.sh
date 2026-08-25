@@ -20,6 +20,12 @@ else
     echo "Neither uv nor pip found — skipping tool uninstall."
 fi
 
+# Remove desktop entry and icon files
+echo "Removing desktop entry and icons..."
+rm -f "$HOME/.local/share/applications/coopixel.desktop"
+rm -f "$HOME/.local/share/icons/hicolor/512x512/apps/coopixel.png"
+rm -f "$HOME/.local/share/icons/coopixel.png"
+
 echo "============================================="
 echo "Uninstallation complete!"
 echo "============================================="

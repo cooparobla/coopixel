@@ -74,8 +74,7 @@ class MoveTool(Tool):
             if len(parts) == 2:
                 px, py = int(parts[0]), int(parts[1])
                 nx, ny = px + dx, py + dy
-                if doc.is_valid_coord(nx, ny):
-                    new_pixels[f"{nx},{ny}"] = color_hex
+                new_pixels[f"{nx},{ny}"] = color_hex
         active.pixels = new_pixels
 
         # If active selection exists, also shift selection mask
@@ -119,8 +118,7 @@ class MoveTool(Tool):
             if len(parts) == 2:
                 px, py = int(parts[0]), int(parts[1])
                 nx, ny = px + dx, py + dy
-                if doc.is_valid_coord(nx, ny):
-                    new_pixels[f"{nx},{ny}"] = color_hex
+                new_pixels[f"{nx},{ny}"] = color_hex
         active.pixels = new_pixels
 
         if selection and not selection.is_empty():

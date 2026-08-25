@@ -279,6 +279,7 @@ class LayerPanel(QDockWidget):
         tag_act = menu.addAction("🏷️ Set Tag...")
         dup_act = menu.addAction("📑 Duplicate Layer")
         rename_act = menu.addAction("✏️ Rename Layer")
+        crop_act = menu.addAction("✂️ Crop Layer to Canvas")
         del_act = menu.addAction("🗑️ Delete Layer")
 
         action = menu.exec_(self.list_widget.mapToGlobal(pos)) if hasattr(menu, 'exec_') else menu.exec(self.list_widget.mapToGlobal(pos))
@@ -292,6 +293,8 @@ class LayerPanel(QDockWidget):
             self.on_duplicate_layer()
         elif action == rename_act and item:
             self._on_item_double_clicked(item)
+        elif action == crop_act:
+            self.on_crop_layer_to_canvas()
         elif action == del_act:
             self.on_delete_layer()
 
@@ -310,6 +313,11 @@ class LayerPanel(QDockWidget):
             self.refresh_list()
             self.layer_structure_changed.emit()
 
+    def on_crop_layer_to_canvas(self) -> None:
+        self.doc.crop_active_layer_to_canvas()
+        self.refresh_list()
+        self.layer_structure_changed.emit()
+
     def on_set_layer_tag(self) -> None:
         active = self.doc.active_layer
         if active:
@@ -320,3 +328,4 @@ class LayerPanel(QDockWidget):
                 active.tag = new_tag.strip()
                 self.refresh_list()
                 self.layer_structure_changed.emit()
+

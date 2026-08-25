@@ -11,20 +11,28 @@ from pycaml import CAMLMap
 from coopixel.models.effects import LayerEffect, effect_from_dict
 
 
+_COLOR_CACHE: Dict[str, QColor] = {}
+
+
 def hex_to_qcolor(hex_str: str) -> QColor:
-    s = hex_str.lstrip("#")
-    if len(s) == 8:
-        r = int(s[0:2], 16)
-        g = int(s[2:4], 16)
-        b = int(s[4:6], 16)
-        a = int(s[6:8], 16)
-        return QColor(r, g, b, a)
-    elif len(s) == 6:
-        r = int(s[0:2], 16)
-        g = int(s[2:4], 16)
-        b = int(s[4:6], 16)
-        return QColor(r, g, b, 255)
-    return QColor(hex_str)
+    col = _COLOR_CACHE.get(hex_str)
+    if col is None:
+        s = hex_str.lstrip("#")
+        if len(s) == 8:
+            r = int(s[0:2], 16)
+            g = int(s[2:4], 16)
+            b = int(s[4:6], 16)
+            a = int(s[6:8], 16)
+            col = QColor(r, g, b, a)
+        elif len(s) == 6:
+            r = int(s[0:2], 16)
+            g = int(s[2:4], 16)
+            b = int(s[4:6], 16)
+            col = QColor(r, g, b, 255)
+        else:
+            col = QColor(hex_str)
+        _COLOR_CACHE[hex_str] = col
+    return col
 
 
 def qcolor_to_hex(qcol: QColor) -> str:
@@ -83,6 +91,47 @@ class Layer:
 
     def clear_all(self) -> None:
         self.pixels.clear()
+
+    def crop_to_bounds(self, width: int, height: int) -> int:
+        """Removes any pixels in this layer lying outside (0 <= x < width) and (0 <= y < height). Returns count removed."""
+        to_delete = []
+        for key in list(self.pixels.keys()):
+            parts = key.split(",")
+            if len(parts) == 2:
+                x, y = int(parts[0]), int(parts[1])
+                if not (0 <= x < width and 0 <= y < height):
+                    to_delete.append(key)
+        for k in to_delete:
+            del self.pixels[k]
+        return len(to_delete)
+
+    def get_content_bbox(self, clip_to_doc: bool = False, doc_width: int = 0, doc_height: int = 0) -> Optional[Tuple[int, int, int, int]]:
+        """Returns (x, y, width, height) bounding box of non-empty pixels in this layer, or None if empty."""
+        if not self.pixels:
+            return None
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        found = False
+
+        for coord_str in self.pixels.keys():
+            parts = coord_str.split(",")
+            if len(parts) == 2:
+                px, py = int(parts[0]), int(parts[1])
+                if clip_to_doc and doc_width > 0 and doc_height > 0 and not (0 <= px < doc_width and 0 <= py < doc_height):
+                    continue
+                found = True
+                if px < min_x:
+                    min_x = px
+                if px > max_x:
+                    max_x = px
+                if py < min_y:
+                    min_y = py
+                if py > max_y:
+                    max_y = py
+
+        if not found:
+            return None
+        return (int(min_x), int(min_y), int(max_x - min_x + 1), int(max_y - min_y + 1))
 
     def clone(self, name: Optional[str] = None) -> "Layer":
         layer_name = name if name is not None else f"{self.name} Copy"
@@ -458,6 +507,13 @@ class PixelDocument:
     def move_layer_down(self, index: int) -> bool:
         return self.active_frame.move_layer_down(index)
 
+    def crop_active_layer_to_canvas(self) -> int:
+        """Crops current active layer to canvas dimensions (0, 0, width, height)."""
+        active = self.active_layer
+        if active:
+            return active.crop_to_bounds(self.width, self.height)
+        return 0
+
     def is_valid_coord(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
@@ -532,7 +588,7 @@ class PixelDocument:
         """Crops canvas to bounding box (x, y, width, height)."""
         self.resize_canvas(new_width=width, new_height=height, offset_x=-x, offset_y=-y)
 
-    def get_content_bbox(self) -> Optional[Tuple[int, int, int, int]]:
+    def get_content_bbox(self, clip_to_doc: bool = False) -> Optional[Tuple[int, int, int, int]]:
         """Returns (x, y, width, height) bounding box of non-empty pixels across all layers/frames, or None if empty."""
         min_x, min_y = float("inf"), float("inf")
         max_x, max_y = float("-inf"), float("-inf")
@@ -545,16 +601,17 @@ class PixelDocument:
                         parts = coord_str.split(",")
                         if len(parts) == 2:
                             px, py = int(parts[0]), int(parts[1])
-                            if 0 <= px < self.width and 0 <= py < self.height:
-                                found = True
-                                if px < min_x:
-                                    min_x = px
-                                if px > max_x:
-                                    max_x = px
-                                if py < min_y:
-                                    min_y = py
-                                if py > max_y:
-                                    max_y = py
+                            if clip_to_doc and not (0 <= px < self.width and 0 <= py < self.height):
+                                continue
+                            found = True
+                            if px < min_x:
+                                min_x = px
+                            if px > max_x:
+                                max_x = px
+                            if py < min_y:
+                                min_y = py
+                            if py > max_y:
+                                max_y = py
 
         if not found:
             return None
@@ -646,57 +703,63 @@ class PixelDocument:
             cmap = CAMLMap.load_pix(filepath)
         return cls.from_dict(cmap.data, filepath=filepath)
 
-    def render_frame_qimage(self, frame_index: int) -> QImage:
+    def render_frame_qimage(self, frame_index: int = 0) -> QImage:
         """Renders specified frame's layers into a single QImage with transparency and layer effects."""
         if not (0 <= frame_index < len(self.frames)):
             frame_index = self.active_frame_index
         target_frame = self.frames[frame_index]
 
-        image = QImage(self.width, self.height, QImage.Format_ARGB32_Premultiplied)
+        w, h = self.width, self.height
+        image = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
         image.fill(QColor(0, 0, 0, 0))  # Clear transparent
 
         painter = QPainter(image)
         for layer in target_frame.layers:
-            if not layer.visible or layer.opacity <= 0:
+            if not layer.visible or layer.opacity <= 0 or not layer.pixels:
                 continue
 
-            painter.setOpacity(layer.opacity)
-
-            # Compute layer effects
+            # Compute layer effects if present
             below_map: Dict[str, str] = {}
             above_map: Dict[str, str] = {}
             for eff in layer.effects:
                 if eff and eff.enabled:
-                    b_dict, a_dict = eff.render_effect(layer.pixels, self.width, self.height)
+                    b_dict, a_dict = eff.render_effect(layer.pixels, w, h)
                     below_map.update(b_dict)
                     above_map.update(a_dict)
 
-            # 1. Render below-effect pixels (e.g. outside stroke)
-            for coord, hex_str in below_map.items():
-                parts = coord.split(",")
-                if len(parts) == 2:
-                    x, y = int(parts[0]), int(parts[1])
-                    if self.is_valid_coord(x, y):
-                        painter.setPen(hex_to_qcolor(hex_str))
-                        painter.drawPoint(x, y)
+            # Build layer buffer for fast rendering — write directly into a bytearray
+            # instead of calling setPixelColor() per pixel (O(n) Qt→Python overhead).
+            # Format_ARGB32 byte order on LE: B, G, R, A.
+            stride = w * 4
+            buf = bytearray(stride * h)  # all-transparent initially
 
-            # 2. Render base layer pixels
-            for coord, hex_str in layer.pixels.items():
-                parts = coord.split(",")
-                if len(parts) == 2:
-                    x, y = int(parts[0]), int(parts[1])
-                    if self.is_valid_coord(x, y):
-                        painter.setPen(hex_to_qcolor(hex_str))
-                        painter.drawPoint(x, y)
+            def _write_pixels(pixel_map: Dict[str, str]) -> None:
+                for coord, hex_str in pixel_map.items():
+                    parts = coord.split(",")
+                    if len(parts) == 2:
+                        x, y = int(parts[0]), int(parts[1])
+                        if 0 <= x < w and 0 <= y < h:
+                            col = hex_to_qcolor(hex_str)
+                            idx = y * stride + x * 4
+                            buf[idx]     = col.blue()
+                            buf[idx + 1] = col.green()
+                            buf[idx + 2] = col.red()
+                            buf[idx + 3] = col.alpha()
 
-            # 3. Render above-effect pixels (e.g. inside stroke)
-            for coord, hex_str in above_map.items():
-                parts = coord.split(",")
-                if len(parts) == 2:
-                    x, y = int(parts[0]), int(parts[1])
-                    if self.is_valid_coord(x, y):
-                        painter.setPen(hex_to_qcolor(hex_str))
-                        painter.drawPoint(x, y)
+            # 1. Below-effect pixels (e.g. outside stroke)
+            _write_pixels(below_map)
+            # 2. Base layer pixels
+            _write_pixels(layer.pixels)
+            # 3. Above-effect pixels (e.g. inside stroke)
+            _write_pixels(above_map)
+
+            layer_img = QImage(bytes(buf), w, h, stride, QImage.Format_ARGB32)
+
+            if layer.opacity < 1.0:
+                painter.setOpacity(layer.opacity)
+            else:
+                painter.setOpacity(1.0)
+            painter.drawImage(0, 0, layer_img)
 
         painter.end()
         return image
@@ -732,15 +795,26 @@ class PixelDocument:
             name = os.path.splitext(basename)[0]
 
         layer = self.add_layer(name=name)
-        w = min(image.width(), self.width)
-        h = min(image.height(), self.height)
+        w = image.width()
+        h = image.height()
 
-        for x in range(w):
-            for y in range(h):
-                qcol = image.pixelColor(x, y)
-                if qcol.alpha() > 0:
-                    hex_str = f"#{qcol.red():02X}{qcol.green():02X}{qcol.blue():02X}{qcol.alpha():02X}"
-                    layer.set_pixel(x, y, hex_str)
+        # Convert to ARGB32 for predictable byte layout (B, G, R, A on LE),
+        # then read the raw buffer directly — avoids O(w*h) pixelColor() calls.
+        image = image.convertToFormat(QImage.Format_ARGB32)
+        src_bits = image.bits()  # memoryview into the image buffer
+        src_stride = image.bytesPerLine()
+        new_pixels: Dict[str, str] = {}
+        for y in range(h):
+            row_base = y * src_stride
+            for x in range(w):
+                idx = row_base + x * 4
+                b = src_bits[idx]
+                g = src_bits[idx + 1]
+                r = src_bits[idx + 2]
+                a = src_bits[idx + 3]
+                if a > 0:
+                    new_pixels[f"{x},{y}"] = f"#{r:02X}{g:02X}{b:02X}{a:02X}"
+        layer.pixels = new_pixels
 
         return layer
 

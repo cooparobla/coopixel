@@ -170,3 +170,43 @@ def test_main_window_right_toolbar_and_animation_panel():
 
     mw.close()
 
+
+def test_independent_layers_per_frame():
+    doc = PixelDocument(16, 16)
+    # Add layers to initial frame (Frame 1)
+    doc.add_layer("Outline")
+    doc.add_layer("Color")
+    assert [l.name for l in doc.layers] == ["Background", "Outline", "Color"]
+
+    # Add a new frame via doc.add_frame() -> starts with fresh default layers for Frame 2
+    f2 = doc.add_frame("Frame 2")
+    assert len(doc.frames) == 2
+    assert [l.name for l in f2.layers] == ["Background"]
+
+    # Adding a layer on doc when Frame 2 is active ONLY adds to Frame 2
+    doc.add_layer("Frame2 Detail")
+    assert [l.name for l in doc.frames[0].layers] == ["Background", "Outline", "Color"]
+    assert [l.name for l in doc.frames[1].layers] == ["Background", "Frame2 Detail"]
+
+    # Switching back to Frame 1 shows Frame 1's layers
+    doc.select_frame(0)
+    assert [l.name for l in doc.layers] == ["Background", "Outline", "Color"]
+
+
+def test_space_hotkey_animation_toggle():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    assert mw.animation_panel.is_playing is False
+
+    # Toggle play via animation panel
+    mw.animation_panel.toggle_play()
+    assert mw.animation_panel.is_playing is True
+
+    # Toggle pause
+    mw.animation_panel.toggle_play()
+    assert mw.animation_panel.is_playing is False
+
+    mw.close()
+
+
+

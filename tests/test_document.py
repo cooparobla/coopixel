@@ -296,6 +296,34 @@ def test_canvas_resize_and_crop():
     assert layer.get_pixel(6, 6) == "#00FF00FF"
 
 
+def test_crop_all_layers_purges_outside_data():
+    doc = PixelDocument(32, 32)
+    layer1 = doc.active_layer
+    layer2 = doc.add_layer("Layer 2")
+
+    # Set pixels inside and outside target crop box (x=8, y=8, w=16, h=16)
+    layer1.set_pixel(2, 2, "#FF0000FF")    # Outside (top-left)
+    layer1.set_pixel(10, 10, "#00FF00FF")  # Inside -> will become (2, 2)
+    layer1.set_pixel(30, 30, "#0000FFFF")  # Outside (bottom-right)
+
+    layer2.set_pixel(5, 5, "#FFFF00FF")    # Outside
+    layer2.set_pixel(12, 12, "#FF00FFFF")  # Inside -> will become (4, 4)
+
+    # Perform crop
+    doc.crop_canvas(8, 8, 16, 16)
+
+    assert doc.width == 16
+    assert doc.height == 16
+
+    # Verify layer 1: outside pixels purged, inside pixel shifted
+    assert layer1.get_pixel(2, 2) == "#00FF00FF"
+    assert len(layer1.pixels) == 1  # Only 1 pixel remains inside bounds
+
+    # Verify layer 2: outside pixels purged, inside pixel shifted
+    assert layer2.get_pixel(4, 4) == "#FF00FFFF"
+    assert len(layer2.pixels) == 1  # Only 1 pixel remains inside bounds
+
+
 def test_crop_tool_interactive():
     app = QApplication.instance() or QApplication([])
     mw = MainWindow()
@@ -358,7 +386,7 @@ def test_draw_tool_encompasses_shapes_and_pencil():
     mw = MainWindow()
     order = mw.tool_panel._tool_order
     assert "draw" in order
-    assert order == ["crop", "move", "selection", "draw", "eraser", "picker", "fill"]
+    assert order == ["move", "selection", "draw", "eraser", "picker", "fill", "crop"]
 
     # Test sub-mode selection via select_tool_by_key
     mw.tool_panel.select_tool_by_key("pencil")
@@ -461,6 +489,133 @@ def test_import_image_dialog_and_canvas_resize(tmp_path):
     assert doc.width == 64
     assert doc.height == 48
     assert layer.get_pixel(0, 0) == "#00FF00FF"
+
+
+def test_large_resolution_rendering_performance():
+    import time
+    app = QApplication.instance() or QApplication([])
+
+    # Create a 512x512 document with 50,000 filled pixels
+    doc = PixelDocument(512, 512)
+    layer = doc.active_layer
+    for x in range(0, 512, 2):
+        for y in range(0, 200):
+            layer.set_pixel(x, y, "#FF5500FF")
+
+    t0 = time.perf_counter()
+    img = doc.render_composite_qimage()
+    elapsed = time.perf_counter() - t0
+
+    assert img.width() == 512 and img.height() == 512
+    # Composite rendering for 50,000 pixels should take less than 100ms
+    assert elapsed < 0.1
+
+
+def test_layer_content_bbox_and_toggle():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    layer = mw.doc.active_layer
+    assert layer.get_content_bbox(mw.doc.width, mw.doc.height) is None
+
+    layer.set_pixel(10, 10, "#FF0000FF")
+    layer.set_pixel(20, 25, "#00FF00FF")
+
+    bbox = layer.get_content_bbox(mw.doc.width, mw.doc.height)
+    assert bbox == (10, 10, 11, 16)
+
+    assert mw.canvas.show_layer_bounds is True
+    mw.canvas.toggle_layer_bounds()
+    assert mw.canvas.show_layer_bounds is False
+    mw.canvas.toggle_layer_bounds()
+    assert mw.canvas.show_layer_bounds is True
+
+    mw.close()
+
+
+def test_canvas_startup_centering():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    mw.resize(1000, 800)
+    mw.show()
+    app.processEvents()
+
+    canvas = mw.canvas
+    canvas_px_w = canvas.doc.width * canvas.zoom_level
+    canvas_px_h = canvas.doc.height * canvas.zoom_level
+    expected_dx = (canvas.width() - canvas_px_w) / 2.0
+    expected_dy = (canvas.height() - canvas_px_h) / 2.0
+
+    assert abs(canvas.pan_offset.x() - expected_dx) < 1.0
+    assert abs(canvas.pan_offset.y() - expected_dy) < 1.0
+
+    mw.close()
+
+
+
+def test_import_large_image_without_resizing_preserves_offcanvas_pixels(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    doc = PixelDocument(16, 16)
+
+    # Create a 64x64 test image with a pixel at (50, 50)
+    img_path = str(tmp_path / "large.png")
+    img = QImage(64, 64, QImage.Format_ARGB32)
+    img.fill(QColor(0, 0, 0, 0))
+    img.setPixelColor(50, 50, QColor(255, 0, 0, 255))
+    img.save(img_path)
+
+    # Import without resizing canvas
+    layer = doc.import_image_as_layer(img_path, resize_canvas=False)
+    assert layer is not None
+    assert doc.width == 16 and doc.height == 16
+
+    # Verify off-canvas pixel at (50, 50) is preserved in layer.pixels!
+    assert layer.get_pixel(50, 50) == "#FF0000FF"
+    assert layer.get_content_bbox() == (50, 50, 1, 1)
+
+    # Verify cropping canvas to (0, 0, 16, 16) prunes pixels outside crop box
+    doc.crop_canvas(0, 0, 16, 16)
+    assert layer.get_pixel(50, 50) is None
+    assert len(layer.pixels) == 0
+
+
+def test_crop_layer_to_canvas():
+    doc = PixelDocument(16, 16)
+    layer = doc.active_layer
+    layer.set_pixel(5, 5, "#FF0000FF")      # Inside canvas
+    layer.set_pixel(-2, 5, "#00FF00FF")     # Outside left
+    layer.set_pixel(20, 10, "#0000FFFF")    # Outside right
+
+    assert len(layer.pixels) == 3
+    removed = doc.crop_active_layer_to_canvas()
+    assert removed == 2
+    assert len(layer.pixels) == 1
+    assert layer.get_pixel(5, 5) == "#FF0000FF"
+
+
+def test_canvas_view_options_toggles():
+    app = QApplication.instance() or QApplication([])
+    mw = MainWindow()
+    canvas = mw.canvas
+
+    assert canvas.show_grid is True
+    assert canvas.show_canvas_border is True
+    assert canvas.show_layer_bounds is True
+
+    mw._on_toggle_grid_clicked()
+    assert canvas.show_grid is False
+    assert mw.view_btn_grid.isChecked() is False
+
+    mw._on_toggle_border_clicked()
+    assert canvas.show_canvas_border is False
+    assert mw.view_btn_border.isChecked() is False
+
+    mw._on_toggle_bounds_clicked()
+    assert canvas.show_layer_bounds is False
+    assert mw.view_btn_bounds.isChecked() is False
+
+    mw.close()
+
+
 
 
 

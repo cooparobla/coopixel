@@ -5,6 +5,7 @@ Supports opening .pix / .caml files directly from command line arguments (e.g. `
 
 import os
 import sys
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 from coopixel.ui.main_window import MainWindow
 from coopixel.ui.theme import apply_dark_theme
@@ -14,6 +15,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Coopixel")
     app.setOrganizationName("Coopa")
+    app.setDesktopFileName("coopixel")
+
+    # Set application icon
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
 
     # Apply sleek dark palette & theme stylesheet
     apply_dark_theme(app)
