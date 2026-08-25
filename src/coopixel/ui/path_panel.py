@@ -74,12 +74,14 @@ class PathPanel(QDockWidget):
         # ---- Paths List Widget ----
         self.list_widget = QListWidget()
         self.list_widget.setStyleSheet(
-            "QListWidget { background-color: #0F172A; border: 1px solid #334155; border-radius: 4px; }"
-            "QListWidget::item { padding: 6px; border-bottom: 1px solid #1E293B; color: #F1F5F9; }"
-            "QListWidget::item:selected { background-color: #C25E00; color: #FFFFFF; font-weight: bold; }"
+            "QListWidget { background-color: #202020; border: 1px solid #333333; border-radius: 6px; color: #E2E8F0; padding: 4px; font-size: 11px; }"
+            "QListWidget::item { padding: 6px; border-radius: 4px; margin-bottom: 2px; color: #E2E8F0; }"
+            "QListWidget::item:hover { background-color: #2A2A2A; }"
+            "QListWidget::item:selected { background-color: #2E2620; border-left: 3px solid #F97316; color: #F8FAFC; font-weight: bold; }"
         )
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
         main_layout.addWidget(self.list_widget, stretch=1)
+
 
         self.setWidget(main_widget)
         self.refresh_panel()
