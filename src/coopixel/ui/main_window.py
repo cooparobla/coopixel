@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 from coopixel.models.document import PixelDocument, hex_to_qcolor
 from coopixel.models.history import HistoryStack
+from coopixel.ui.actions_panel import ActionRecord, ActionsPanel
 from coopixel.ui.animation_panel import AnimationPanel
 from coopixel.ui.appearance_panel import AppearancePanel
 from coopixel.ui.canvas import CanvasWidget
@@ -96,6 +97,7 @@ class MainWindow(QMainWindow):
         self.layer_panel = LayerPanel(self.doc, self)
         self.layer_panel.layer_structure_changed.connect(self.on_layer_structure_changed)
         self.layer_panel.layer_visual_changed.connect(self.on_layer_visual_changed)
+        self.layer_panel.crop_layer_requested.connect(self.on_crop_layer_requested)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.layer_panel)
 
         # Color panel below layers
@@ -117,6 +119,11 @@ class MainWindow(QMainWindow):
         self.tag_panel.tag_visibility_changed.connect(self.on_tag_visibility_changed)
         self.addDockWidget(Qt.RightDockWidgetArea, self.tag_panel)
         self.tag_panel.hide()
+
+        self.actions_panel = ActionsPanel(self)
+        self.actions_panel.run_action_requested.connect(self.on_run_action)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.actions_panel)
+        self.actions_panel.hide()
 
         # ---- Bottom Dock Panels ----
         self.animation_panel = AnimationPanel(self.doc, self)
@@ -180,6 +187,13 @@ class MainWindow(QMainWindow):
         tag_act.toggled.connect(self.tag_panel.setVisible)
         self.tag_panel.visibilityChanged.connect(tag_act.setChecked)
 
+        actions_act = QAction("⚡", self)
+        actions_act.setToolTip("Actions History")
+        actions_act.setCheckable(True)
+        actions_act.setChecked(self.actions_panel.isVisible())
+        actions_act.toggled.connect(self.actions_panel.setVisible)
+        self.actions_panel.visibilityChanged.connect(actions_act.setChecked)
+
         anim_act = QAction("🎬", self)
         anim_act.setToolTip("Animation Timeline")
         anim_act.setCheckable(True)
@@ -189,6 +203,7 @@ class MainWindow(QMainWindow):
 
         right_tb.addAction(app_act)
         right_tb.addAction(tag_act)
+        right_tb.addAction(actions_act)
         right_tb.addAction(anim_act)
         self.addToolBar(Qt.RightToolBarArea, right_tb)
 
@@ -839,6 +854,23 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         self.status_bar.showMessage(f"Cropped canvas to {w}×{h} px at ({x}, {y})", 2000)
 
+        # Record crop_canvas action
+        self.actions_panel.record_action(
+            action_type="crop_canvas",
+            params={"x": x, "y": y, "width": w, "height": h},
+            display_name="Crop Canvas",
+            details=f"Bounds: {w}×{h} px at ({x}, {y})",
+        )
+
+    def on_crop_layer_requested(self) -> None:
+        active_name = self.doc.active_layer.name if self.doc.active_layer else "Active Layer"
+        self.actions_panel.record_action(
+            action_type="crop_layer",
+            params={},
+            display_name="Crop Layer to Canvas",
+            details=f"Layer: '{active_name}' to canvas ({self.doc.width}×{self.doc.height} px)",
+        )
+
     def on_crop_tool_commit_requested(self) -> None:
         crop_tool = getattr(self.tool_panel, "crop_tool", None)
         if crop_tool and crop_tool.crop_box:
@@ -1157,8 +1189,75 @@ class MainWindow(QMainWindow):
                         self.appearance_panel.refresh_panel()
                         self.animation_panel.refresh_timeline()
                         self.status_bar.showMessage(f"Imported {os.path.basename(filepath)} as layer '{layer.name}'", 3000)
+
+                        # Record import_layer action
+                        ext = os.path.splitext(filepath)[1].lstrip(".").upper() or "IMAGE"
+                        filename = os.path.basename(filepath)
+                        self.actions_panel.record_action(
+                            action_type="import_layer",
+                            params={
+                                "filepath": filepath,
+                                "filetype": ext,
+                                "layer_name": layer_name,
+                                "resize_canvas": resize_canvas,
+                                "scale_to_canvas": scale_to_canvas,
+                            },
+                            display_name=f"Import Image ({filename})",
+                            details=f"Format: {ext} | Layer: '{layer_name}' | Resize Canvas: {'Yes' if resize_canvas else 'No'} | Scale: {'Yes' if scale_to_canvas else 'No'}",
+                        )
                 except Exception as e:
                     QMessageBox.critical(self, "Import Error", f"Failed to import image:\n{e}")
+
+    def on_run_action(self, action_record: ActionRecord) -> None:
+        """Handler for re-running a recorded action from the Actions Panel."""
+        atype = action_record.action_type
+        params = action_record.params
+
+        if atype == "import_layer":
+            filepath = params.get("filepath", "")
+            if not os.path.exists(filepath):
+                QMessageBox.warning(self, "Run Action Failed", f"Image file no longer exists at path:\n{filepath}")
+                return
+            layer_name = params.get("layer_name", "Imported Layer")
+            resize_canvas = params.get("resize_canvas", False)
+            scale_to_canvas = params.get("scale_to_canvas", False)
+
+            try:
+                layer = self.doc.import_image_as_layer(
+                    filepath,
+                    name=layer_name,
+                    resize_canvas=resize_canvas,
+                    scale_to_canvas=scale_to_canvas,
+                )
+                if layer:
+                    self._push_history()
+                    self.canvas.invalidate_cache()
+                    self.canvas.center_canvas()
+                    self.canvas.update()
+                    self.layer_panel.refresh_list()
+                    self.appearance_panel.refresh_panel()
+                    self.animation_panel.refresh_timeline()
+                    ext = os.path.splitext(filepath)[1].lstrip(".").upper() or "IMAGE"
+                    filename = os.path.basename(filepath)
+                    self.actions_panel.record_action(
+                        action_type="import_layer",
+                        params=dict(params),
+                        display_name=f"Import Image ({filename})",
+                        details=f"Format: {ext} | Layer: '{layer.name}' | Resize Canvas: {'Yes' if resize_canvas else 'No'} | Scale: {'Yes' if scale_to_canvas else 'No'}",
+                    )
+                    self.status_bar.showMessage(f"Re-run: Imported {filename} as layer '{layer.name}'", 3000)
+            except Exception as e:
+                QMessageBox.critical(self, "Action Error", f"Failed to re-run image import:\n{e}")
+
+        elif atype == "crop_canvas":
+            x = params.get("x", 0)
+            y = params.get("y", 0)
+            w = params.get("width", self.doc.width)
+            h = params.get("height", self.doc.height)
+            self.on_crop_committed(x, y, w, h)
+
+        elif atype == "crop_layer":
+            self.layer_panel.on_crop_layer_to_canvas()
 
     def on_file_export_png(self) -> None:
         filepath, _ = QFileDialog.getSaveFileName(

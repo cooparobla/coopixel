@@ -479,7 +479,7 @@ def test_import_image_dialog_and_canvas_resize(tmp_path):
     dlg = ImportImageDialog(img_path, img_width=64, img_height=48, canvas_width=16, canvas_height=16)
     name, resize_canvas, scale_to_canvas = dlg.get_values()
     assert name == "test_img"
-    assert resize_canvas is True
+    assert resize_canvas is False
     assert scale_to_canvas is False
     dlg.close()
 

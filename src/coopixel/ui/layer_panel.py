@@ -65,6 +65,8 @@ class LayerPanel(QDockWidget):
     layer_structure_changed = Signal()
     # Emitted when only visual attributes change (opacity/visibility/lock) → repaint only
     layer_visual_changed = Signal()
+    # Emitted when crop active layer to canvas is requested
+    crop_layer_requested = Signal()
 
     def __init__(self, doc: Optional[PixelDocument] = None, parent: Optional[QWidget] = None):
         super().__init__("Layers", parent)
@@ -317,6 +319,7 @@ class LayerPanel(QDockWidget):
         self.doc.crop_active_layer_to_canvas()
         self.refresh_list()
         self.layer_structure_changed.emit()
+        self.crop_layer_requested.emit()
 
     def on_set_layer_tag(self) -> None:
         active = self.doc.active_layer

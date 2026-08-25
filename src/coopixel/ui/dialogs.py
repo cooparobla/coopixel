@@ -347,8 +347,8 @@ class ImportImageDialog(QDialog):
 
         self.resize_cb = QCheckBox(f"Resize canvas to fit imported image ({img_width} × {img_height} px)")
         self.resize_cb.setToolTip("Resizes document canvas dimensions to match the imported image size")
-        if img_width != canvas_width or img_height != canvas_height:
-            self.resize_cb.setChecked(True)
+        # Default to unchecked so importing image does not alter canvas size by default
+        self.resize_cb.setChecked(False)
 
         self.scale_cb = QCheckBox("Scale image to fit current canvas size")
         self.scale_cb.setToolTip("Scales the imported image to fit inside current canvas bounds")
