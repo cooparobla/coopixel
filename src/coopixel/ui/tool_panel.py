@@ -114,8 +114,9 @@ class ToolPanel(QFrame):
         for tool_key, icon, tip in tool_defs:
             tool_obj = self.tools[tool_key]
             btn = _tool_btn(icon, tip)
-            if tool_key == "draw":
+            if tool_key == "selection":
                 btn.setChecked(True)
+
             self.btn_group.addButton(btn)
             tools_layout.addWidget(btn)
             btn.clicked.connect(lambda _checked, t=tool_obj, k=tool_key: self._on_tool_clicked(t, k))
@@ -325,15 +326,16 @@ class ToolPanel(QFrame):
         crop_layout.addStretch(1)
         self.ctx_stack.addWidget(crop_widget)
 
-        # Page 4 — Move Options
+
+        # Page 4 — Move Tool Sub-toolbar (Nudge buttons: Left, Right, Up, Down)
         move_widget = QWidget()
         move_layout = QHBoxLayout(move_widget)
         move_layout.setContentsMargins(0, 0, 0, 0)
-        move_layout.setSpacing(6)
+        move_layout.setSpacing(4)
 
-        move_lbl = QLabel("Move:")
-        move_lbl.setStyleSheet("color: #38BDF8; font-weight: bold;")
-        move_layout.addWidget(move_lbl)
+        nudge_label = QLabel("Nudge:")
+        nudge_label.setStyleSheet("color: #94A3B8; font-weight: 500; font-size: 10px;")
+        move_layout.addWidget(nudge_label)
 
         nudge_btns = [
             ("←", -1, 0, "Nudge Left 1px"),
@@ -344,7 +346,7 @@ class ToolPanel(QFrame):
         for symbol, dx, dy, tip in nudge_btns:
             nb = QPushButton(symbol)
             nb.setToolTip(tip)
-            nb.setFixedSize(30, 26)
+            nb.setFixedSize(24, 24)
             nb.setStyleSheet(
                 "QPushButton { background: #1E293B; border: 1px solid #334155; color: #F8FAFC; font-weight: bold; border-radius: 4px; }"
                 "QPushButton:hover { background: #334155; border-color: #38BDF8; color: #38BDF8; }"
@@ -355,17 +357,48 @@ class ToolPanel(QFrame):
         move_layout.addStretch(1)
         self.ctx_stack.addWidget(move_widget)
 
-        # Page 5 — Empty (Eraser / Picker)
-        self.ctx_stack.addWidget(QWidget())
+        # Page 5 — Pen Tool Modes
+        pen_widget = QWidget()
+        pen_layout = QHBoxLayout(pen_widget)
+        pen_layout.setContentsMargins(0, 0, 0, 0)
+        pen_layout.setSpacing(4)
+        pen_lbl = QLabel("Pen Tool:")
+        pen_lbl.setStyleSheet("color: #94A3B8; font-weight: 500;")
+        pen_layout.addWidget(pen_lbl)
 
-        main_layout.addWidget(self.ctx_stack)
-        main_layout.addStretch(1)
+        btn_new_p = QToolButton()
+        btn_new_p.setText("+ New Path")
+        btn_new_p.setToolTip("Create new vector path")
+        btn_new_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
+        btn_new_p.clicked.connect(self.pen_new_path_requested.emit)
+
+        btn_stroke_p = QToolButton()
+        btn_stroke_p.setText("🖌️ Stroke Path")
+        btn_stroke_p.setToolTip("Rasterize active path outline onto active layer")
+        btn_stroke_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
+        btn_stroke_p.clicked.connect(self.pen_stroke_requested.emit)
+
+        btn_fill_p = QToolButton()
+        btn_fill_p.setText("🎨 Fill Path")
+        btn_fill_p.setToolTip("Rasterize active path interior onto active layer")
+        btn_fill_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
+        btn_fill_p.clicked.connect(self.pen_fill_requested.emit)
+
+        pen_layout.addWidget(btn_new_p)
+        pen_layout.addWidget(btn_stroke_p)
+        pen_layout.addWidget(btn_fill_p)
+        pen_layout.addStretch(1)
+        self.ctx_stack.addWidget(pen_widget)
+
+        # Page 6 — Empty spacer for tools with no extra context options
+        self.ctx_stack.addWidget(QWidget())
+        main_layout.addWidget(self.ctx_stack, stretch=1)
 
         # Shared reference to the canvas selection (set later by MainWindow)
         self._canvas_selection = None
 
-        # Start on pencil context
-        self.ctx_stack.setCurrentIndex(0)
+        # Start on selection tool by default
+        self.select_tool_by_key("selection")
 
     # ------------------------------------------------------------------
     # Public API
@@ -406,42 +439,6 @@ class ToolPanel(QFrame):
                 btns[idx].setChecked(True)
         self._on_tool_clicked(tool, actual_key)
 
-        # Page 5 — Pen Tool Modes
-        pen_widget = QWidget()
-        pen_layout = QHBoxLayout(pen_widget)
-        pen_layout.setContentsMargins(0, 0, 0, 0)
-        pen_layout.setSpacing(4)
-        pen_lbl = QLabel("Pen Tool:")
-        pen_lbl.setStyleSheet("color: #94A3B8; font-weight: 500;")
-        pen_layout.addWidget(pen_lbl)
-
-        btn_new_p = QToolButton()
-        btn_new_p.setText("+ New Path")
-        btn_new_p.setToolTip("Create new vector path")
-        btn_new_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
-        btn_new_p.clicked.connect(self.pen_new_path_requested.emit)
-
-        btn_stroke_p = QToolButton()
-        btn_stroke_p.setText("🖌️ Stroke Path")
-        btn_stroke_p.setToolTip("Rasterize active path outline onto active layer")
-        btn_stroke_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
-        btn_stroke_p.clicked.connect(self.pen_stroke_requested.emit)
-
-        btn_fill_p = QToolButton()
-        btn_fill_p.setText("🎨 Fill Path")
-        btn_fill_p.setToolTip("Rasterize active path interior onto active layer")
-        btn_fill_p.setStyleSheet("QToolButton { background: #282828; color: #F1F5F9; border: 1px solid #333333; border-radius: 4px; padding: 3px 8px; font-size: 11px; } QToolButton:hover { background: #C25E00; }")
-        btn_fill_p.clicked.connect(self.pen_fill_requested.emit)
-
-        pen_layout.addWidget(btn_new_p)
-        pen_layout.addWidget(btn_stroke_p)
-        pen_layout.addWidget(btn_fill_p)
-        pen_layout.addStretch(1)
-        self.ctx_stack.addWidget(pen_widget)
-
-        # Page 6 — Empty spacer for tools with no extra context options
-        self.ctx_stack.addWidget(QWidget())
-        main_layout.addWidget(self.ctx_stack, stretch=1)
 
     def _on_tool_clicked(self, tool: Tool, key: str) -> None:
         if key in ("draw", "pencil"):

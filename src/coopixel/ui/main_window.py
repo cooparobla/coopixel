@@ -83,8 +83,9 @@ class MainWindow(QMainWindow):
         self.canvas.selection_committed.connect(self.on_selection_committed)
 
 
-        # Set default tool to Pencil
-        self.canvas.active_tool = self.tool_panel.tools["pencil"]
+        # Set default tool to Selection Tool
+        self.tool_panel.select_tool_by_key("selection")
+
 
         # Wire Color Picker callback
         self.tool_panel.tools["picker"].on_color_picked = self.on_color_picked_from_canvas
@@ -1292,8 +1293,10 @@ class MainWindow(QMainWindow):
             self.tag_panel.set_document(self.doc)
             self.align_panel.set_document(self.doc)
             self.path_panel.set_document(self.doc)
+            self.tool_panel.select_tool_by_key("selection")
             self._clean_state_snapshot = copy.deepcopy(self.doc.to_dict())
             self.update_window_title()
+
 
     def open_file(self, filepath: str) -> bool:
         """Opens a .pix / .caml file directly from the given file path."""
