@@ -23,6 +23,7 @@ from coopixel.tools.drawing import BucketFillTool, DrawTool, EraserTool, PencilT
 from coopixel.tools.move import MoveTool
 from coopixel.tools.pen import PenTool
 from coopixel.tools.picker import ColorPickerTool
+from coopixel.tools.pivot import PivotTool
 from coopixel.tools.selection import SelectionTool
 from coopixel.tools.shapes import CircleTool, LineTool, RectangleTool
 
@@ -62,6 +63,7 @@ class ToolPanel(QFrame):
     pen_stroke_requested = Signal()
     pen_fill_requested = Signal()
     pen_new_path_requested = Signal()
+    pivot_changed = Signal(int, int)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -84,6 +86,7 @@ class ToolPanel(QFrame):
         self.move_tool = MoveTool()
         self.draw_tool = DrawTool()
         self.pen_tool = PenTool()
+        self.pivot_tool = PivotTool()
 
         self.tools: Dict[str, Tool] = {
             "crop": self.crop_tool,
@@ -95,19 +98,20 @@ class ToolPanel(QFrame):
             "picker": ColorPickerTool(),
             "fill": self.fill_tool,
             "pen": self.pen_tool,
+            "pivot": self.pivot_tool,
         }
 
         tool_defs = [
             ("move",      "🖐️", "Move Tool (V)"),
             ("selection", "🔲", "Selection Tool (S)"),
             ("draw",      "✏️", "Draw Tool (D)"),
-            ("pen",       "🖋️", "Pen Tool (P): Vector paths & Bezier curves"),
+            ("pen",       "🖋️", "Pen Tool: Vector paths & Bezier curves"),
+            ("pivot",     "📌", "Pivot Tool (P): Position active frame pivot point"),
             ("eraser",    "🧹", "Eraser Tool (E)"),
             ("picker",    "🧪", "Color Picker (I)"),
             ("fill",      "🪣", "Bucket Fill Tool (F)"),
             ("crop",      "✂️", "Crop Tool (K)"),
         ]
-
 
         self._tool_order = [k for k, _, _ in tool_defs]
 
@@ -326,7 +330,6 @@ class ToolPanel(QFrame):
         crop_layout.addStretch(1)
         self.ctx_stack.addWidget(crop_widget)
 
-
         # Page 4 — Move Tool Sub-toolbar (Nudge buttons: Left, Right, Up, Down)
         move_widget = QWidget()
         move_layout = QHBoxLayout(move_widget)
@@ -390,7 +393,51 @@ class ToolPanel(QFrame):
         pen_layout.addStretch(1)
         self.ctx_stack.addWidget(pen_widget)
 
-        # Page 6 — Empty spacer for tools with no extra context options
+        # Page 6 — Pivot Tool options (Pivot X and Pivot Y spinboxes)
+        pivot_widget = QWidget()
+        pivot_layout = QHBoxLayout(pivot_widget)
+        pivot_layout.setContentsMargins(0, 0, 0, 0)
+        pivot_layout.setSpacing(6)
+
+        pivot_lbl = QLabel("Pivot Position:")
+        pivot_lbl.setStyleSheet("color: #F97316; font-weight: bold;")
+        pivot_layout.addWidget(pivot_lbl)
+
+        px_lbl = QLabel("X:")
+        px_lbl.setStyleSheet("color: #94A3B8;")
+        pivot_layout.addWidget(px_lbl)
+
+        self.pivot_x_spin = QSpinBox()
+        self.pivot_x_spin.setRange(-8192, 8192)
+        self.pivot_x_spin.setValue(0)
+        self.pivot_x_spin.setSuffix(" px")
+        self.pivot_x_spin.setToolTip("Active frame pivot point X position")
+        self.pivot_x_spin.setStyleSheet(
+            "QSpinBox { background: #1E293B; border: 1px solid #334155; color: #F8FAFC; padding: 2px 4px; border-radius: 3px; min-width: 68px; }"
+        )
+        pivot_layout.addWidget(self.pivot_x_spin)
+
+        py_lbl = QLabel("Y:")
+        py_lbl.setStyleSheet("color: #94A3B8;")
+        pivot_layout.addWidget(py_lbl)
+
+        self.pivot_y_spin = QSpinBox()
+        self.pivot_y_spin.setRange(-8192, 8192)
+        self.pivot_y_spin.setValue(0)
+        self.pivot_y_spin.setSuffix(" px")
+        self.pivot_y_spin.setToolTip("Active frame pivot point Y position")
+        self.pivot_y_spin.setStyleSheet(
+            "QSpinBox { background: #1E293B; border: 1px solid #334155; color: #F8FAFC; padding: 2px 4px; border-radius: 3px; min-width: 68px; }"
+        )
+        pivot_layout.addWidget(self.pivot_y_spin)
+
+        self.pivot_x_spin.valueChanged.connect(self._on_pivot_spin_changed)
+        self.pivot_y_spin.valueChanged.connect(self._on_pivot_spin_changed)
+
+        pivot_layout.addStretch(1)
+        self.ctx_stack.addWidget(pivot_widget)
+
+        # Page 7 — Empty spacer for tools with no extra context options
         self.ctx_stack.addWidget(QWidget())
         main_layout.addWidget(self.ctx_stack, stretch=1)
 
@@ -439,7 +486,6 @@ class ToolPanel(QFrame):
                 btns[idx].setChecked(True)
         self._on_tool_clicked(tool, actual_key)
 
-
     def _on_tool_clicked(self, tool: Tool, key: str) -> None:
         if key in ("draw", "pencil"):
             self.ctx_stack.setCurrentIndex(0)
@@ -453,10 +499,11 @@ class ToolPanel(QFrame):
             self.ctx_stack.setCurrentIndex(4)
         elif key == "pen":
             self.ctx_stack.setCurrentIndex(5)
-        else:
+        elif key == "pivot":
             self.ctx_stack.setCurrentIndex(6)
+        else:
+            self.ctx_stack.setCurrentIndex(7)
         self.tool_selected.emit(tool)
-
 
     def _on_draw_mode(self, mode: str) -> None:
         self.draw_tool.mode = mode
@@ -477,33 +524,25 @@ class ToolPanel(QFrame):
 
     def update_crop_box_ui(self, x: int, y: int, w: int, h: int) -> None:
         """Called by MainWindow when the canvas crop box changes (drag or Fit buttons)."""
-        # Block signals to avoid triggering crop_wh_changed during programmatic update
         self.crop_w_spin.blockSignals(True)
         self.crop_h_spin.blockSignals(True)
-        self.crop_w_spin.setValue(w)
-        self.crop_h_spin.setValue(h)
+        self.crop_w_spin.setValue(max(1, w))
+        self.crop_h_spin.setValue(max(1, h))
         self.crop_w_spin.blockSignals(False)
         self.crop_h_spin.blockSignals(False)
 
     def _on_clear_selection(self) -> None:
-        if self._canvas_selection is not None:
-            was_not_empty = not self._canvas_selection.is_empty()
+        if self._canvas_selection:
             self._canvas_selection.clear()
-            if was_not_empty:
-                self.selection_cleared.emit()
-        if self.parent():
-            canvas = getattr(self.parent(), "canvas", None)
-            if canvas:
-                canvas.update()
+        self.selection_cleared.emit()
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_Escape and self._canvas_selection:
-            was_not_empty = not self._canvas_selection.is_empty()
-            self._canvas_selection.clear()
-            if was_not_empty:
-                self.selection_cleared.emit()
-            if self.parent():
-                canvas = getattr(self.parent(), "canvas", None)
-                if canvas:
-                    canvas.update()
-        super().keyPressEvent(event)
+    def _on_pivot_spin_changed(self) -> None:
+        self.pivot_changed.emit(self.pivot_x_spin.value(), self.pivot_y_spin.value())
+
+    def update_pivot_spins(self, x: int, y: int) -> None:
+        self.pivot_x_spin.blockSignals(True)
+        self.pivot_y_spin.blockSignals(True)
+        self.pivot_x_spin.setValue(x)
+        self.pivot_y_spin.setValue(y)
+        self.pivot_x_spin.blockSignals(False)
+        self.pivot_y_spin.blockSignals(False)

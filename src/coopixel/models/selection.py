@@ -44,3 +44,16 @@ class SelectionModel:
     def invert(self, doc: PixelDocument) -> None:
         all_px = {(x, y) for x in range(doc.width) for y in range(doc.height)}
         self.selected = all_px - self.selected
+
+    def select_layer_pixels(self, layer, doc: PixelDocument) -> None:
+        """Selects every pixel that the layer has values for within the document bounds."""
+        coords = set()
+        for key, val in layer.pixels.items():
+            if val and str(val).upper() not in ("#00000000", "TRANSPARENT"):
+                parts = key.split(",")
+                if len(parts) == 2:
+                    x, y = int(parts[0]), int(parts[1])
+                    if 0 <= x < doc.width and 0 <= y < doc.height:
+                        coords.add((x, y))
+        self.replace(coords)
+

@@ -32,6 +32,7 @@ from coopixel.ui.color_panel import ColorPanel
 from coopixel.ui.dialogs import AboutDialog, CanvasSizeDialog, CropCanvasDialog, ImportImageDialog, NewCanvasDialog
 from coopixel.ui.layer_panel import LayerPanel
 from coopixel.ui.path_panel import PathPanel
+from coopixel.ui.spritesheet_import_dialog import SpritesheetImportDialog
 from coopixel.ui.tag_panel import TagPanel
 from coopixel.ui.tool_panel import ToolPanel
 
@@ -77,15 +78,16 @@ class MainWindow(QMainWindow):
         self.tool_panel.crop_wh_changed.connect(self.on_crop_wh_changed)
         self.tool_panel.selection_cleared.connect(self.on_selection_committed)
         self.tool_panel.move_nudge_requested.connect(self.on_move_nudge_requested)
+        self.tool_panel.pivot_changed.connect(self.on_pivot_changed)
 
         self.canvas.crop_committed.connect(self.on_crop_committed)
         self.canvas.crop_box_changed.connect(self.tool_panel.update_crop_box_ui)
         self.canvas.selection_committed.connect(self.on_selection_committed)
-
+        self.canvas.pivot_modified.connect(self.tool_panel.update_pivot_spins)
+        self.canvas.color_picked.connect(lambda hex_col: self.color_panel.set_primary_color(hex_col))
 
         # Set default tool to Selection Tool
         self.tool_panel.select_tool_by_key("selection")
-
 
         # Wire Color Picker callback
         self.tool_panel.tools["picker"].on_color_picked = self.on_color_picked_from_canvas
@@ -99,6 +101,7 @@ class MainWindow(QMainWindow):
         self.layer_panel.layer_structure_changed.connect(self.on_layer_structure_changed)
         self.layer_panel.layer_visual_changed.connect(self.on_layer_visual_changed)
         self.layer_panel.crop_layer_requested.connect(self.on_crop_layer_requested)
+        self.layer_panel.select_layer_content_requested.connect(self.on_select_layer_content)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.layer_panel)
 
         # Color panel below layers
@@ -295,6 +298,10 @@ class MainWindow(QMainWindow):
         import_act.triggered.connect(self.on_file_import_png)
         file_menu.addAction(import_act)
 
+        import_sheet_act = QAction("Import &Spritesheet...", self)
+        import_sheet_act.triggered.connect(self.on_file_import_spritesheet)
+        file_menu.addAction(import_sheet_act)
+
         import_pal_act = QAction("Import &Palette PNG...", self)
         import_pal_act.setShortcut(QKeySequence("Ctrl+Shift+P"))
         import_pal_act.triggered.connect(self.color_panel.on_load_palette_png)
@@ -365,6 +372,10 @@ class MainWindow(QMainWindow):
         invert_sel_act.triggered.connect(self.on_invert_selection)
         edit_menu.addAction(invert_sel_act)
 
+        sel_layer_act = QAction("Select Layer &Content", self)
+        sel_layer_act.triggered.connect(lambda: self.on_select_layer_content())
+        edit_menu.addAction(sel_layer_act)
+
         # ---- IMAGE ----
         image_menu = menu_bar.addMenu("&Image")
 
@@ -408,9 +419,14 @@ class MainWindow(QMainWindow):
         self.addAction(pencil_tool_act)
 
         pen_tool_act = QAction("Pen Tool", self)
-        pen_tool_act.setShortcut(QKeySequence("P"))
+        pen_tool_act.setShortcut(QKeySequence("Shift+P"))
         pen_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pen"))
         self.addAction(pen_tool_act)
+
+        pivot_tool_act = QAction("Pivot Tool", self)
+        pivot_tool_act.setShortcut(QKeySequence("P"))
+        pivot_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pivot"))
+        self.addAction(pivot_tool_act)
 
 
         eraser_tool_act = QAction("Eraser Tool", self)
@@ -860,6 +876,7 @@ class MainWindow(QMainWindow):
     def on_tag_visibility_changed(self) -> None:
         """Called when tag global visibility eye toggle is clicked."""
         self._push_history()
+        self.canvas.invalidate_cache()
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
         self.animation_panel.refresh_timeline()
@@ -880,6 +897,9 @@ class MainWindow(QMainWindow):
         self.appearance_panel.refresh_panel()
         self.tag_panel.refresh_tags()
         self.path_panel.refresh_panel()
+        if self.doc and self.doc.active_animation:
+            anim = self.doc.active_animation
+            self.tool_panel.update_pivot_spins(anim.pivot_x, anim.pivot_y)
         self.canvas.update()
 
 
@@ -902,7 +922,20 @@ class MainWindow(QMainWindow):
         if getattr(tool, "name", "") == "pen":
             if not self.path_panel.isVisible():
                 self.path_panel.show()
+        elif getattr(tool, "name", "") == "pivot":
+            if self.doc and self.doc.active_animation:
+                anim = self.doc.active_animation
+                self.tool_panel.update_pivot_spins(anim.pivot_x, anim.pivot_y)
         self.canvas.update()
+
+    def on_pivot_changed(self, x: int, y: int) -> None:
+        if self.doc and self.doc.active_animation:
+            anim = self.doc.active_animation
+            if anim.pivot_x != x or anim.pivot_y != y:
+                anim.pivot_x = x
+                anim.pivot_y = y
+                self._push_history()
+                self.canvas.update()
 
 
     def on_brush_size_changed(self, size: int) -> None:
@@ -1140,6 +1173,17 @@ class MainWindow(QMainWindow):
     def on_invert_selection(self) -> None:
         self.canvas.selection.invert(self.doc)
         self.on_selection_committed()
+
+    def on_select_layer_content(self, layer_index: Optional[int] = None) -> None:
+        if layer_index is None:
+            layer_index = self.doc.active_layer_index
+        if not self.doc or not (0 <= layer_index < len(self.doc.layers)):
+            return
+        self.doc.active_layer_index = layer_index
+        layer = self.doc.layers[layer_index]
+        self.canvas.selection.select_layer_pixels(layer, self.doc)
+        self.on_selection_committed()
+        self.status_bar.showMessage(f"Selected content pixels on layer '{layer.name}'", 1500)
 
     def on_copy(self) -> None:
         """Copies selected pixels (or active layer pixels) to clipboard."""
@@ -1422,6 +1466,30 @@ class MainWindow(QMainWindow):
                         )
                 except Exception as e:
                     QMessageBox.critical(self, "Import Error", f"Failed to import image:\n{e}")
+
+    def on_file_import_spritesheet(self) -> None:
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Import Spritesheet PNG", "", "PNG Images (*.png);;All Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)"
+        )
+        if not filepath:
+            return
+
+        img = QImage(filepath)
+        if img.isNull():
+            QMessageBox.warning(self, "Import Failed", "Could not load image file.")
+            return
+
+        dlg = SpritesheetImportDialog(filepath, img, active_doc=self.doc, parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.result_document:
+            self.doc = dlg.result_document
+            self._push_history()
+            self.canvas.invalidate_cache()
+            self.canvas.center_canvas()
+            self.canvas.update()
+            self.layer_panel.refresh_list()
+            self.appearance_panel.refresh_panel()
+            self.animation_panel.set_document(self.doc)
+            self.status_bar.showMessage(f"Imported spritesheet {os.path.basename(filepath)} successfully", 3000)
 
     def on_run_action(self, action_record: ActionRecord) -> None:
         """Handler for re-running a recorded action from the Actions Panel."""

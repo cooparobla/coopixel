@@ -4,6 +4,7 @@ Layer Panel Widget for managing document layers in Coopixel.
 
 from typing import Optional
 from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QDockWidget,
@@ -21,11 +22,26 @@ from PySide6.QtWidgets import (
 from coopixel.models.document import Layer, PixelDocument
 
 
+class LayerListWidget(QListWidget):
+    ctrl_clicked_item = Signal(int)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and (event.modifiers() & Qt.ControlModifier):
+            item = self.itemAt(event.pos())
+            if item:
+                index = item.data(Qt.UserRole)
+                self.ctrl_clicked_item.emit(index)
+                super().mousePressEvent(event)
+                return
+        super().mousePressEvent(event)
+
+
 class LayerItemWidget(QWidget):
     """Row widget for a single layer entry in the list."""
 
     visibility_changed = Signal(int, bool)
     lock_changed = Signal(int, bool)
+    ctrl_clicked = Signal(int)
 
     def __init__(self, index: int, layer: Layer, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -59,6 +75,13 @@ class LayerItemWidget(QWidget):
         layout.addWidget(self.lock_cb)
         layout.addWidget(self.name_label, stretch=1)
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and (event.modifiers() & Qt.ControlModifier):
+            self.ctrl_clicked.emit(self.index)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
 
 class LayerPanel(QDockWidget):
     # Emitted when layer structure changes (add/delete/move/duplicate) → triggers history push
@@ -67,6 +90,8 @@ class LayerPanel(QDockWidget):
     layer_visual_changed = Signal()
     # Emitted when crop active layer to canvas is requested
     crop_layer_requested = Signal()
+    # Emitted when selecting all pixel content of a layer is requested
+    select_layer_content_requested = Signal(int)
 
     def __init__(self, doc: Optional[PixelDocument] = None, parent: Optional[QWidget] = None):
         super().__init__("Layers", parent)
@@ -126,11 +151,12 @@ class LayerPanel(QDockWidget):
         layout.addLayout(btn_layout)
 
         # 2. Layer List
-        self.list_widget = QListWidget()
+        self.list_widget = LayerListWidget()
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._on_context_menu)
+        self.list_widget.ctrl_clicked_item.connect(self._on_ctrl_click_layer)
         layout.addWidget(self.list_widget, stretch=1)
 
         # 3. Opacity Slider
@@ -169,6 +195,7 @@ class LayerPanel(QDockWidget):
             widget = LayerItemWidget(i, layer)
             widget.visibility_changed.connect(self._on_visibility_changed)
             widget.lock_changed.connect(self._on_lock_changed)
+            widget.ctrl_clicked.connect(self._on_ctrl_click_layer)
 
             item.setSizeHint(widget.sizeHint())
             self.list_widget.addItem(item)
@@ -278,6 +305,7 @@ class LayerPanel(QDockWidget):
         paste_act = menu.addAction("📥 Paste Layer")
         paste_act.setEnabled(getattr(LayerPanel, "_shared_layer_clipboard", None) is not None)
         menu.addSeparator()
+        sel_content_act = menu.addAction("🎯 Select Layer Content")
         tag_act = menu.addAction("🏷️ Set Tag...")
         dup_act = menu.addAction("📑 Duplicate Layer")
         rename_act = menu.addAction("✏️ Rename Layer")
@@ -289,6 +317,8 @@ class LayerPanel(QDockWidget):
             self.on_copy_layer()
         elif action == paste_act:
             self.on_paste_layer()
+        elif action == sel_content_act:
+            self.select_layer_content_requested.emit(self.doc.active_layer_index)
         elif action == tag_act:
             self.on_set_layer_tag()
         elif action == dup_act:
@@ -299,6 +329,12 @@ class LayerPanel(QDockWidget):
             self.on_crop_layer_to_canvas()
         elif action == del_act:
             self.on_delete_layer()
+
+    def _on_ctrl_click_layer(self, index: int) -> None:
+        if 0 <= index < len(self.doc.layers):
+            self.doc.active_layer_index = index
+            self.refresh_list()
+            self.select_layer_content_requested.emit(index)
 
     def on_copy_layer(self) -> None:
         active = self.doc.active_layer

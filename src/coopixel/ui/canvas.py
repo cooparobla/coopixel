@@ -8,6 +8,7 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal, QTimer
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QCursor,
     QFont,
     QImage,
     QMouseEvent,
@@ -19,12 +20,13 @@ from PySide6.QtGui import (
 )
 
 from PySide6.QtWidgets import QWidget
-from coopixel.models.document import PixelDocument, hex_to_qcolor
+from coopixel.models.document import PixelDocument, hex_to_qcolor, qcolor_to_hex
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
 from coopixel.tools.crop import CropTool
 from coopixel.tools.move import MoveTool
 from coopixel.tools.pen import PenTool
+from coopixel.tools.pivot import PivotTool
 from coopixel.tools.selection import SelectionTool
 
 
@@ -43,6 +45,10 @@ class CanvasWidget(QWidget):
     path_modified = Signal()
     # Emitted when a selection is created, modified, or cleared via canvas interaction
     selection_committed = Signal()
+    # Emitted when the pivot point position is modified via PivotTool canvas drag
+    pivot_modified = Signal(int, int)
+    # Emitted when a color is picked via Alt+Click canvas interaction
+    color_picked = Signal(str)
 
     def __init__(self, doc: Optional[PixelDocument] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -63,6 +69,7 @@ class CanvasWidget(QWidget):
         self.show_grid: bool = True
         self.show_canvas_border: bool = True
         self.show_layer_bounds: bool = True  # Faint outline around active layer content bounds
+        self.show_pivot: bool = True  # Display pivot point on canvas
         self.pan_offset: QPointF = QPointF(40.0, 40.0)
         self._initial_centered: bool = False
         self.is_panning: bool = False
@@ -272,6 +279,10 @@ class CanvasWidget(QWidget):
 
         # 7.5. Vector Bezier Path Overlay
         self._draw_vector_paths(painter)
+
+        # 7.6. Pivot Point Overlay (Visible ONLY when Pivot Tool is selected and active)
+        if isinstance(self.active_tool, PivotTool):
+            self._draw_pivot_overlay(painter)
 
         # 8. Hover cursor indicator (scaled to match current tool brush size)
 
@@ -547,22 +558,82 @@ class CanvasWidget(QWidget):
 
 
 
+    def _draw_pivot_overlay(self, painter: QPainter) -> None:
+        """Renders an antialiased pivot point crosshair indicator on the active animation."""
+        if not self.doc or not self.doc.active_animation:
+            return
+        anim = self.doc.active_animation
+        px = anim.pivot_x
+        py = anim.pivot_y
+
+        z = self.zoom_level
+        cx = self.pan_offset.x() + (px + 0.5) * z
+        cy = self.pan_offset.y() + (py + 0.5) * z
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        radius = max(8.0, min(24.0, z * 0.8))
+
+        # Outer shadow circle
+        painter.setPen(QPen(QColor(0, 0, 0, 180), 3))
+        painter.setBrush(QColor(249, 115, 22, 50))  # Translucent orange fill
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+        # Main bright orange ring
+        painter.setPen(QPen(QColor("#F97316"), 2))
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+        # Center cyan dot
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#38BDF8"))
+        painter.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
+
+        # Crosshair lines
+        painter.setPen(QPen(QColor("#F97316"), 2))
+        painter.drawLine(QPointF(cx - radius - 5, cy), QPointF(cx + radius + 5, cy))
+        painter.drawLine(QPointF(cx, cy - radius - 5), QPointF(cx, cy + radius + 5))
+
+        painter.restore()
+
     def _is_selection_tool(self) -> bool:
         return isinstance(self.active_tool, SelectionTool)
 
+    def _sample_color_at(self, px: int, py: int) -> Optional[str]:
+        if not self.doc or not self.doc.is_valid_coord(px, py):
+            return None
+        comp_img = self.get_composite_image()
+        if 0 <= px < comp_img.width() and 0 <= py < comp_img.height():
+            qcol = comp_img.pixelColor(px, py)
+            if qcol.alpha() > 0:
+                return qcolor_to_hex(qcol)
+        layer = self.doc.active_layer
+        if layer:
+            return layer.get_pixel(px, py)
+        return None
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        # Middle mouse or Alt+Left = pan
-        if event.button() == Qt.MiddleButton or (
-            event.button() == Qt.LeftButton and event.modifiers() & Qt.AltModifier
-            and not self._is_selection_tool()
-        ):
+        # Middle mouse = pan
+        if event.button() == Qt.MiddleButton:
             self.is_panning = True
             self.last_pan_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
             return
 
-        if event.button() == Qt.LeftButton and self.active_tool:
+        # Alt + LeftButton = pick color underneath mouse into primary color
+        if event.button() == Qt.LeftButton and (event.modifiers() & Qt.AltModifier):
             px, py = self.window_to_canvas_coord(event.position())
+            color_hex = self._sample_color_at(px, py)
+            if color_hex:
+                self.color_picked.emit(color_hex)
+            return
+
+        if event.button() == Qt.LeftButton:
+            px, py = self.window_to_canvas_coord(event.position())
+            if not self.active_tool:
+                return
+
+            self._stroke_dirty = False
 
             # Shift-constrain for crop tool & move tool
             if isinstance(self.active_tool, (CropTool, MoveTool)):
@@ -578,6 +649,7 @@ class CanvasWidget(QWidget):
                 else:
                     sel_tool._op = "replace"
 
+            # Notify Pen Tool whether Paths Panel is open
             parent_window = self.window()
             path_panel = getattr(parent_window, "path_panel", None)
             is_path_panel_open = path_panel.isVisible() if path_panel is not None else False
@@ -610,15 +682,18 @@ class CanvasWidget(QWidget):
                     shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
                 )
 
-            if changed:
+            if changed or isinstance(self.active_tool, PivotTool):
                 self._stroke_dirty = True
                 self.canvas_updated.emit()
                 if isinstance(self.active_tool, (PenTool, MoveTool)):
                     self.path_modified.emit()
+                elif isinstance(self.active_tool, PivotTool):
+                    if self.doc and self.doc.active_animation:
+                        anim = self.doc.active_animation
+                        self.pivot_modified.emit(anim.pivot_x, anim.pivot_y)
             elif self._is_selection_tool():
-
-                # Selection changes don't dirty the document but need a repaint
                 self.update()
+
             if isinstance(self.active_tool, CropTool) and self.active_tool.crop_box:
                 cx, cy, cw, ch = self.active_tool.crop_box
                 self.crop_box_changed.emit(cx, cy, cw, ch)
@@ -644,6 +719,12 @@ class CanvasWidget(QWidget):
             self.pan_offset += QPointF(delta.x(), delta.y())
             self.last_pan_pos = event.pos()
             self.update()
+            return
+
+        if (event.buttons() & Qt.LeftButton) and (event.modifiers() & Qt.AltModifier):
+            color_hex = self._sample_color_at(px, py)
+            if color_hex:
+                self.color_picked.emit(color_hex)
             return
 
         # Cursor shape update when hovering over move tool handle
@@ -685,6 +766,10 @@ class CanvasWidget(QWidget):
                 self.canvas_updated.emit()
                 if isinstance(self.active_tool, (PenTool, MoveTool)):
                     self.path_modified.emit()
+                elif isinstance(self.active_tool, PivotTool):
+                    if self.doc and self.doc.active_animation:
+                        anim = self.doc.active_animation
+                        self.pivot_modified.emit(anim.pivot_x, anim.pivot_y)
 
             elif self._is_selection_tool():
                 self.update()  # Repaint for rubber-band preview

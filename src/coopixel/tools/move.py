@@ -3,7 +3,7 @@ Move tool for Coopixel pixel art editor.
 Shifts the active layer pixels (and active selection) interactively across the canvas.
 """
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from PySide6.QtCore import QPointF
 from coopixel.models.document import PixelDocument
 from coopixel.models.selection import SelectionModel
@@ -61,6 +61,8 @@ class MoveTool(Tool):
         pan_offset: Optional[QPointF] = None,
         zoom: float = 1.0,
         path_panel_open: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
         self.is_drawing = True
         self.drag_start = (x, y)
@@ -122,18 +124,19 @@ class MoveTool(Tool):
         filled: bool = False,
         selection: Optional[SelectionModel] = None,
         path_panel_open: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
         if not self.is_drawing or not self.drag_start:
             return False
+        sx, sy = self.drag_start
+        dx, dy = x - sx, y - sy
 
-        if self.moving_path and doc.active_path and self.initial_anchors:
-            dx = float(x - self.drag_start[0])
-            dy = float(y - self.drag_start[1])
-            for idx, anchor in enumerate(doc.active_path.anchors):
-                if idx < len(self.initial_anchors):
-                    init_x, init_y = self.initial_anchors[idx]
-                    anchor.x = init_x + dx
-                    anchor.y = init_y + dy
+        if self.moving_path and doc.active_path:
+            for idx, (ax, ay) in enumerate(self.initial_anchors):
+                if idx < len(doc.active_path.anchors):
+                    doc.active_path.anchors[idx].x = ax + dx
+                    doc.active_path.anchors[idx].y = ay + dy
             return True
 
         active = doc.active_layer
@@ -142,25 +145,14 @@ class MoveTool(Tool):
 
         if self.is_resizing and self.initial_bbox:
             bx, by, bw, bh = self.initial_bbox
-            new_w = max(1, x - bx)
-            new_h = max(1, y - by)
+            new_w = max(1, bw + dx)
+            new_h = max(1, bh + dy)
+
             if self.constrain_square:
-                side = max(1, max(new_w, new_h))
+                side = max(new_w, new_h)
                 new_w = side
                 new_h = side
 
-            # Nearest-neighbor pixel scaling
-            new_pixels: Dict[str, str] = {}
-            for dx_idx in range(new_w):
-                for dy_idx in range(new_h):
-                    src_dx = int(dx_idx * bw / new_w)
-                    src_dy = int(dy_idx * bh / new_h)
-                    src_x = bx + src_dx
-                    src_y = by + src_dy
-                    color = self.initial_pixels.get(f"{src_x},{src_y}")
-                    if color:
-                        new_pixels[f"{bx + dx_idx},{by + dy_idx}"] = color
-            active.pixels = new_pixels
 
             # Resample selection mask if active
             if selection and self.initial_selection is not None:

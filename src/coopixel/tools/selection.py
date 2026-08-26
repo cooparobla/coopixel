@@ -4,7 +4,7 @@ Supports multiple selection modes: draw (paint), box, circle, fill-contiguous, f
 """
 
 import math
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 from coopixel.models.document import PixelDocument
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
@@ -69,8 +69,8 @@ class SelectionTool(Tool):
     # Tool interface
     # ------------------------------------------------------------------
 
-    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
-        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection)
+    def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args: Any, **kwargs: Any) -> bool:
+        super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         self._drag_start = (x, y)
 
         if self.mode == self.DRAW:
@@ -89,7 +89,7 @@ class SelectionTool(Tool):
                 self._apply(coords)
         return False  # Selection tool doesn't modify the document
 
-    def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
+    def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args: Any, **kwargs: Any) -> bool:
         if not self.is_drawing:
             return False
         if self.mode == self.DRAW:
@@ -98,27 +98,22 @@ class SelectionTool(Tool):
                 sx, sy = self.last_x, self.last_y
                 for lx, ly in bresenham_line(sx, sy, x, y):
                     self._paint_select(lx, ly, size)
-            self.last_x = x
-            self.last_y = y
-        # Box/circle update is driven by get_preview_pixels; no doc change
+                self.last_x, self.last_y = x, y
+            return False
         return False
 
-    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
-        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection)
-        if self._drag_start is None:
-            return False
-
-        if self.mode == self.BOX:
-            coords = _rect_coords(self._drag_start[0], self._drag_start[1], x, y)
-            coords = {c for c in coords if doc.is_valid_coord(*c)}
-            self._apply(coords)
-        elif self.mode == self.CIRCLE:
-            coords = _ellipse_coords(self._drag_start[0], self._drag_start[1], x, y)
-            coords = {c for c in coords if doc.is_valid_coord(*c)}
-            self._apply(coords)
-
+    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args: Any, **kwargs: Any) -> bool:
+        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
+        if self._drag_start:
+            sx, sy = self._drag_start
+            if self.mode == self.BOX:
+                coords = _rect_coords(sx, sy, x, y)
+                self._apply(coords)
+            elif self.mode == self.CIRCLE:
+                coords = _ellipse_coords(sx, sy, x, y)
+                self._apply(coords)
         self._drag_start = None
-        return False  # Selection changes don't write to the document
+        return False
 
     def get_preview_pixels(self, doc: PixelDocument, hover_x: int, hover_y: int, primary_color: str, brush_size: int = 1, filled: bool = False, selection=None) -> Dict[Tuple[int, int], str]:
 

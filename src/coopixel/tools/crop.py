@@ -4,7 +4,7 @@ Allows drawing a crop box rectangle over canvas and committing the crop.
 Hold Shift while dragging to constrain the box to a square.
 """
 
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 from coopixel.models.document import PixelDocument
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
@@ -60,6 +60,8 @@ class CropTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional[SelectionModel] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
         self.is_drawing = True
         self.is_dragging = True
@@ -77,6 +79,8 @@ class CropTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional[SelectionModel] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
         if self.is_dragging and self.drag_start:
             sx, sy = self.drag_start
@@ -93,12 +97,14 @@ class CropTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional[SelectionModel] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
-        self.is_drawing = False
-        self.is_dragging = False
-        if self.drag_start:
+        if self.is_dragging and self.drag_start:
             sx, sy = self.drag_start
             self.crop_box = self._compute_box(sx, sy, x, y)
+        self.is_dragging = False
+        self.is_drawing = False
         return False
 
     def clear_box(self) -> None:

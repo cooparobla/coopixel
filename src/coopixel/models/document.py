@@ -179,15 +179,25 @@ class Layer:
 
 
 class AnimationFrame:
-    """Represents a single animation frame containing layers."""
+    """Represents a single animation frame containing layers and a pivot point."""
 
-    def __init__(self, name: str = "Frame 1", duration_ms: int = 100):
+    def __init__(self, name: str = "Frame 1", duration_ms: int = 100, pivot_x: int = 0, pivot_y: int = 0):
         self.name = name
         self.duration_ms = duration_ms
+        self.pivot_x: int = int(pivot_x)
+        self.pivot_y: int = int(pivot_y)
         self.layers: List[Layer] = []
         self.active_layer_index: int = 0
         # Initialize with default layer
         self.add_layer("Background")
+
+    @property
+    def pivot(self) -> Tuple[int, int]:
+        return (self.pivot_x, self.pivot_y)
+
+    @pivot.setter
+    def pivot(self, pos: Tuple[int, int]) -> None:
+        self.pivot_x, self.pivot_y = int(pos[0]), int(pos[1])
 
     @property
     def active_layer(self) -> Optional[Layer]:
@@ -243,7 +253,12 @@ class AnimationFrame:
         return False
 
     def clone(self) -> "AnimationFrame":
-        new_frame = AnimationFrame(name=f"{self.name} Copy", duration_ms=self.duration_ms)
+        new_frame = AnimationFrame(
+            name=f"{self.name} Copy",
+            duration_ms=self.duration_ms,
+            pivot_x=self.pivot_x,
+            pivot_y=self.pivot_y,
+        )
         new_frame.layers = [l.clone() for l in self.layers]
         new_frame.active_layer_index = min(self.active_layer_index, max(0, len(new_frame.layers) - 1))
         return new_frame
@@ -252,6 +267,8 @@ class AnimationFrame:
         return {
             "name": self.name,
             "duration_ms": self.duration_ms,
+            "pivot_x": self.pivot_x,
+            "pivot_y": self.pivot_y,
             "active_layer": self.active_layer_index,
             "layers": [layer.to_dict() for layer in self.layers],
         }
@@ -260,7 +277,9 @@ class AnimationFrame:
     def from_dict(cls, data: dict) -> "AnimationFrame":
         frame = cls(
             name=data.get("name", "Frame"),
-            duration_ms=int(data.get("duration_ms", 100))
+            duration_ms=int(data.get("duration_ms", 100)),
+            pivot_x=int(data.get("pivot_x", 0)),
+            pivot_y=int(data.get("pivot_y", 0)),
         )
         frame.layers.clear()
         raw_layers = data.get("layers", [])
@@ -274,15 +293,25 @@ class AnimationFrame:
 
 
 class Animation:
-    """Represents a named distinct animation sequence containing frames."""
+    """Represents a named distinct animation sequence containing frames and a shared pivot point."""
 
-    def __init__(self, name: str = "new-animation", fps: int = 10):
+    def __init__(self, name: str = "new-animation", fps: int = 10, pivot_x: int = 16, pivot_y: int = 16):
         self.name = name
         self.fps = fps
+        self.pivot_x: int = int(pivot_x)
+        self.pivot_y: int = int(pivot_y)
         self.frames: List[AnimationFrame] = []
         self.active_frame_index: int = 0
         # Initialize with default frame
         self.frames.append(AnimationFrame("Frame 1"))
+
+    @property
+    def pivot(self) -> Tuple[int, int]:
+        return (self.pivot_x, self.pivot_y)
+
+    @pivot.setter
+    def pivot(self, pos: Tuple[int, int]) -> None:
+        self.pivot_x, self.pivot_y = int(pos[0]), int(pos[1])
 
     @property
     def active_frame(self) -> AnimationFrame:
@@ -344,7 +373,7 @@ class Animation:
         return False
 
     def clone(self) -> "Animation":
-        anim = Animation(name=f"{self.name} Copy", fps=self.fps)
+        anim = Animation(name=f"{self.name} Copy", fps=self.fps, pivot_x=self.pivot_x, pivot_y=self.pivot_y)
         anim.frames = [f.clone() for f in self.frames]
         anim.active_frame_index = min(self.active_frame_index, max(0, len(anim.frames) - 1))
         return anim
@@ -353,18 +382,28 @@ class Animation:
         return {
             "name": self.name,
             "fps": self.fps,
+            "pivot_x": self.pivot_x,
+            "pivot_y": self.pivot_y,
             "active_frame": self.active_frame_index,
             "frames": [f.to_dict() for f in self.frames],
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Animation":
+    def from_dict(cls, data: dict, default_pivot_x: int = 16, default_pivot_y: int = 16) -> "Animation":
+        raw_frames = data.get("frames", [])
+        fallback_px = default_pivot_x
+        fallback_py = default_pivot_y
+        if raw_frames and isinstance(raw_frames[0], dict) and "pivot_x" in raw_frames[0]:
+            fallback_px = int(raw_frames[0].get("pivot_x", default_pivot_x))
+            fallback_py = int(raw_frames[0].get("pivot_y", default_pivot_y))
+
         anim = cls(
             name=data.get("name", "new-animation"),
-            fps=int(data.get("fps", 10))
+            fps=int(data.get("fps", 10)),
+            pivot_x=int(data.get("pivot_x", fallback_px)),
+            pivot_y=int(data.get("pivot_y", fallback_py)),
         )
         anim.frames.clear()
-        raw_frames = data.get("frames", [])
         if raw_frames:
             for f_data in raw_frames:
                 anim.frames.append(AnimationFrame.from_dict(f_data))
@@ -387,9 +426,8 @@ class PixelDocument:
         self.active_path_index: Optional[int] = None
         self.primary_color: str = "#F97316FF"
 
-
         # Every new file MUST have at least one animation named "new-animation"
-        self.animations.append(Animation("new-animation"))
+        self.animations.append(Animation("new-animation", pivot_x=self.width // 2, pivot_y=self.height // 2))
 
     @property
     def active_path(self) -> Optional[VectorPath]:
@@ -549,11 +587,10 @@ class PixelDocument:
     def active_layer(self) -> Optional[Layer]:
         return self.active_frame.active_layer
 
-    # Animation Management API
     def add_animation(self, name: Optional[str] = None) -> Animation:
         if name is None:
             name = f"new-animation-{len(self.animations) + 1}"
-        anim = Animation(name=name)
+        anim = Animation(name=name, pivot_x=self.width // 2, pivot_y=self.height // 2)
         self.animations.append(anim)
         self.active_animation_index = len(self.animations) - 1
         return anim
@@ -737,16 +774,29 @@ class PixelDocument:
 
     def to_dict(self) -> dict:
         """Serializes document data into dictionary format suitable for pycaml encoding."""
+        frames_cnt = sum(len(a.frames) for a in self.animations) if self.animations else len(self.frames)
+        layers_cnt = len(self.frames[0].layers) if self.frames else 0
         return {
             "format": "coopixel",
             "version": "1.0",
             "width": self.width,
             "height": self.height,
+            "metadata": {
+                "format": "coopixel",
+                "version": "1.0",
+                "width": self.width,
+                "height": self.height,
+                "frame_count": frames_cnt,
+                "layer_count": layers_cnt,
+                "animation_count": len(self.animations),
+                "path_count": len(self.paths),
+            },
             "active_animation": self.active_animation_index,
             "animations": [anim.to_dict() for anim in self.animations],
             "paths": [p.to_dict() for p in self.paths],
             "active_path": self.active_path_index,
         }
+
 
     @classmethod
     def from_dict(cls, data: dict, filepath: Optional[str] = None) -> "PixelDocument":
@@ -755,13 +805,16 @@ class PixelDocument:
         doc = cls(width=width, height=height, filepath=filepath)
         doc.animations.clear()
 
+        def_px = width // 2
+        def_py = height // 2
+
         raw_anims = data.get("animations", [])
         if raw_anims:
             for a_data in raw_anims:
-                doc.animations.append(Animation.from_dict(a_data))
+                doc.animations.append(Animation.from_dict(a_data, default_pivot_x=def_px, default_pivot_y=def_py))
         else:
             # Single-animation legacy format
-            anim = Animation("new-animation")
+            anim = Animation("new-animation", pivot_x=def_px, pivot_y=def_py)
             anim.fps = int(data.get("fps", 10))
             anim.onion_skin = bool(data.get("onion_skin", False))
             anim.frames.clear()

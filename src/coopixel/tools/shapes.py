@@ -2,7 +2,7 @@
 Shape tools for Coopixel: Line, Rectangle, and Circle with live preview.
 """
 
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 from coopixel.models.document import PixelDocument
 from coopixel.tools.base import Tool, is_pixel_editable
 from coopixel.tools.drawing import bresenham_line, get_brush_coords
@@ -15,7 +15,7 @@ def get_rectangle_pixels(x0: int, y0: int, x1: int, y1: int, filled: bool) -> Li
     pixels = []
     for x in range(min_x, max_x + 1):
         for y in range(min_y, max_y + 1):
-            if filled or x == min_x or x == max_x or y == min_y or y == max_y:
+            if filled or (x == min_x or x == max_x or y == min_y or y == max_y):
                 pixels.append((x, y))
     return pixels
 
@@ -24,23 +24,21 @@ def get_circle_pixels(x0: int, y0: int, x1: int, y1: int, filled: bool) -> List[
     min_x, max_x = min(x0, x1), max(x0, x1)
     min_y, max_y = min(y0, y1), max(y0, y1)
 
-    center_x = (min_x + max_x) / 2.0
-    center_y = (min_y + max_y) / 2.0
-    rx = (max_x - min_x) / 2.0
-    ry = (max_y - min_y) / 2.0
-
-    if rx <= 0 or ry <= 0:
-        return [(min_x, min_y)]
+    cx = (min_x + max_x) / 2.0
+    cy = (min_y + max_y) / 2.0
+    rx = max((max_x - min_x) / 2.0, 0.5)
+    ry = max((max_y - min_y) / 2.0, 0.5)
 
     pixels = []
     for x in range(min_x, max_x + 1):
         for y in range(min_y, max_y + 1):
-            norm_val = ((x - center_x) / rx) ** 2 + ((y - center_y) / ry) ** 2
+            normalized = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
             if filled:
-                if norm_val <= 1.05:
+                if normalized <= 1.0:
                     pixels.append((x, y))
             else:
-                if 0.75 <= norm_val <= 1.25:
+                inner_norm = max(0.0, ((x - cx) / max(0.1, rx - 0.5)) ** 2 + ((y - cy) / max(0.1, ry - 0.5)) ** 2)
+                if normalized <= 1.0 and inner_norm >= 0.6:
                     pixels.append((x, y))
     return pixels
 
@@ -60,10 +58,10 @@ class LineTool(Tool):
                     preview[(px, py)] = primary_color
         return preview
 
-    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
+    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args: Any, **kwargs: Any) -> bool:
         if not self.is_drawing:
             return False
-        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection)
+        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         layer = doc.active_layer
         if not layer or layer.locked or not layer.visible:
             return False
@@ -92,10 +90,10 @@ class RectangleTool(Tool):
                 preview[(px, py)] = primary_color
         return preview
 
-    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
+    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args: Any, **kwargs: Any) -> bool:
         if not self.is_drawing:
             return False
-        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection)
+        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         layer = doc.active_layer
         if not layer or layer.locked or not layer.visible:
             return False
@@ -123,10 +121,10 @@ class CircleTool(Tool):
                 preview[(px, py)] = primary_color
         return preview
 
-    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None) -> bool:
+    def mouse_release(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args: Any, **kwargs: Any) -> bool:
         if not self.is_drawing:
             return False
-        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection)
+        super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
         layer = doc.active_layer
         if not layer or layer.locked or not layer.visible:
             return False

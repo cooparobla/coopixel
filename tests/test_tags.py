@@ -73,8 +73,10 @@ def test_tag_panel_ui_integration():
     assert mw.tag_panel.container_layout.count() == 1
 
     # Toggle eye in tag panel
+    mw.canvas._render_cache = "mock_cache"
     mw.doc.set_tag_visibility("background", False)
     mw.on_tag_visibility_changed()
 
+    assert mw.canvas._render_cache is None
     assert not mw.doc.active_layer.visible
     mw.close()

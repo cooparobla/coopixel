@@ -4,7 +4,7 @@ Allows adding, dragging, and manipulating Bezier curve anchor points and handles
 """
 
 import math
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from PySide6.QtCore import QPointF
 from coopixel.models.document import PixelDocument
 from coopixel.models.path import AnchorPoint, VectorPath
@@ -66,6 +66,8 @@ class PenTool(Tool):
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
         shift_pressed: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
         self.is_drawing = True
         self.start_x = x
@@ -128,6 +130,8 @@ class PenTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
         self.last_x = x
         self.last_y = y
@@ -173,10 +177,13 @@ class PenTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> bool:
+        was_drawing = self.is_drawing
         self.is_drawing = False
         self.is_dragging_handle = False
-        return False
+        return was_drawing
 
     def delete_selected_anchor(self, doc: PixelDocument) -> bool:
         path = doc.active_path
