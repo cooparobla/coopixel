@@ -394,3 +394,20 @@ def test_spritesheet_import_layer_tag(qapp, monkeypatch):
     assert len(doc.animations) >= 1
     layer = doc.animations[0].frames[0].layers[0]
     assert layer.tag == "hero_body"
+
+
+def test_spritesheet_config_pixpref_tag_persistence(tmp_path):
+    cfg1 = SpritesheetAnimationConfig(name="run", layer_name="Legs", tag="character_movement", start_x=0, start_y=0, num_frames=6, fps=12)
+    cfg2 = SpritesheetAnimationConfig(name="attack", layer_name="Sword", tag="combat_weapon", start_x=0, start_y=32, num_frames=4, fps=15)
+
+    pref_file = str(tmp_path / "test_template.pixpref")
+    save_spritesheet_configs(pref_file, [cfg1, cfg2], global_frame_width=32, global_frame_height=32)
+
+    loaded, fw, fh = load_spritesheet_configs(pref_file)
+    assert len(loaded) == 2
+    assert loaded[0].name == "run"
+    assert loaded[0].layer_name == "Legs"
+    assert loaded[0].tag == "character_movement"
+    assert loaded[1].name == "attack"
+    assert loaded[1].layer_name == "Sword"
+    assert loaded[1].tag == "combat_weapon"

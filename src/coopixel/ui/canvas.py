@@ -313,14 +313,14 @@ class CanvasWidget(QWidget):
                     painter.drawRect(cursor_rect)
 
     def _draw_active_layer_bounds(self, painter: QPainter) -> None:
-        """Renders a faint outline around the bounding box of non-transparent content in the active layer."""
-        if not self.show_layer_bounds:
+        """Renders a faint outline around the bounding box of non-transparent content in the active/selected layers."""
+        if not self.show_layer_bounds or not self.doc:
             return
-        active_layer = self.doc.active_layer
-        if not active_layer or not active_layer.visible or not active_layer.pixels:
+        selected_layers = [l for l in self.doc.selected_layers if l and l.visible and l.pixels]
+        if not selected_layers:
             return
 
-        bbox = active_layer.get_content_bbox()
+        bbox = self.doc.get_combined_selected_layers_bbox()
         if not bbox:
             return
 
@@ -338,8 +338,9 @@ class CanvasWidget(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(bounds_rect)
 
-        # Draw resize handle if Move tool is active
-        if isinstance(self.active_tool, MoveTool) and not active_layer.locked:
+        # Draw resize handle if Move tool is active and any selected layer is unlocked
+        has_unlocked = any(not l.locked for l in selected_layers)
+        if isinstance(self.active_tool, MoveTool) and has_unlocked:
             handle_size = 7.0
             br_x = ox + (bx + bw) * z
             br_y = oy + (by + bh) * z

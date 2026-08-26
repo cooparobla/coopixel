@@ -114,11 +114,17 @@ class AnimationPanel(QDockWidget):
         self.del_anim_btn.setObjectName("secondaryButton")
         self.del_anim_btn.clicked.connect(self.on_delete_animation)
 
+        self.mirror_anim_btn = QPushButton("🪞 Mirror (.L/.R)")
+        self.mirror_anim_btn.setToolTip("Duplicate animation and flip canvas horizontally with opposite suffix (.L / .R)")
+        self.mirror_anim_btn.setObjectName("secondaryButton")
+        self.mirror_anim_btn.clicked.connect(self.on_mirror_animation)
+
         anim_bar_layout.addWidget(anim_lbl)
         anim_bar_layout.addWidget(self.anim_combo)
         anim_bar_layout.addWidget(self.rename_anim_btn)
         anim_bar_layout.addWidget(self.add_anim_btn)
         anim_bar_layout.addWidget(self.del_anim_btn)
+        anim_bar_layout.addWidget(self.mirror_anim_btn)
         anim_bar_layout.addStretch(1)
 
         layout.addLayout(anim_bar_layout)
@@ -287,6 +293,15 @@ class AnimationPanel(QDockWidget):
             self.animation_structure_changed.emit()
             self.active_frame_changed.emit()
 
+    def on_mirror_animation(self) -> None:
+        if self.doc:
+            mirrored = self.doc.mirror_animation()
+            if mirrored:
+                self.refresh_animation_combo()
+                self.refresh_timeline()
+                self.animation_structure_changed.emit()
+                self.active_frame_changed.emit()
+
     def refresh_timeline(self) -> None:
         """Rebuilds frame strip thumbnail cards to reflect current document frames state."""
         # Clear existing widgets
@@ -295,6 +310,11 @@ class AnimationPanel(QDockWidget):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
+
+        # Update Mirror button visibility/enabled state based on .R or .L suffix
+        anim_name = self.doc.active_animation.name.strip() if self.doc and self.doc.active_animation else ""
+        has_lr = anim_name.upper().endswith(".R") or anim_name.upper().endswith(".L")
+        self.mirror_anim_btn.setEnabled(has_lr)
 
         frames_cnt = len(self.doc.frames)
         # Enable or disable delete button: CANNOT delete if only 1 frame exists

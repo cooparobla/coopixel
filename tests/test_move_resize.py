@@ -188,4 +188,37 @@ def test_center_canvas_hotkey(qtbot):
     assert abs(mw.canvas.pan_offset.y() - expected_y) < 1.0
 
 
+def test_multi_layer_selection_and_move():
+    doc = PixelDocument(32, 32)
+    l1 = doc.active_layer
+    l1.name = "Layer 1"
+    l1.set_pixel(2, 2, "#FF0000FF")
+
+    l2 = doc.add_layer("Layer 2")
+    l2.set_pixel(10, 10, "#00FF00FF")
+
+    # Select both Layer 0 and Layer 1
+    doc.set_selected_layer_indices([0, 1])
+    assert len(doc.selected_layers) == 2
+    assert l1 in doc.selected_layers
+    assert l2 in doc.selected_layers
+
+    # Combined bounding box spans (2, 2) to (10, 10) -> (2, 2, 9, 9)
+    bbox = doc.get_combined_selected_layers_bbox()
+    assert bbox == (2, 2, 9, 9)
+
+    # Use MoveTool to drag selected layers by (+5, +3)
+    move_tool = MoveTool()
+    move_tool.mouse_press(doc, 2, 2, "#FF0000FF", "#00000000")
+    move_tool.mouse_move(doc, 7, 5, "#FF0000FF", "#00000000")
+    move_tool.mouse_release(doc, 7, 5, "#FF0000FF", "#00000000")
+
+    # Verify BOTH layers moved by (+5, +3) simultaneously
+    assert l1.get_pixel(7, 5) == "#FF0000FF"
+    assert l1.get_pixel(2, 2) is None
+
+    assert l2.get_pixel(15, 13) == "#00FF00FF"
+    assert l2.get_pixel(10, 10) is None
+
+
 

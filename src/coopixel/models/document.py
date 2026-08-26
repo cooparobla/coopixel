@@ -107,6 +107,28 @@ class Layer:
             del self.pixels[k]
         return len(to_delete)
 
+    def flip_horizontal(self, width: int) -> None:
+        """Flips layer pixels horizontally across specified canvas width."""
+        new_pixels: Dict[str, str] = {}
+        for key, hex_val in self.pixels.items():
+            parts = key.split(",")
+            if len(parts) == 2:
+                x, y = int(parts[0]), int(parts[1])
+                nx = width - 1 - x
+                new_pixels[f"{nx},{y}"] = hex_val
+        self.pixels = new_pixels
+
+    def flip_vertical(self, height: int) -> None:
+        """Flips layer pixels vertically across specified canvas height."""
+        new_pixels: Dict[str, str] = {}
+        for key, hex_val in self.pixels.items():
+            parts = key.split(",")
+            if len(parts) == 2:
+                x, y = int(parts[0]), int(parts[1])
+                ny = height - 1 - y
+                new_pixels[f"{x},{ny}"] = hex_val
+        self.pixels = new_pixels
+
     def get_content_bbox(self, clip_to_doc: bool = False, doc_width: int = 0, doc_height: int = 0) -> Optional[Tuple[int, int, int, int]]:
         """Returns (x, y, width, height) bounding box of non-empty pixels in this layer, or None if empty."""
         if not self.pixels:
@@ -205,6 +227,20 @@ class AnimationFrame:
             return self.layers[self.active_layer_index]
         return None
 
+    @property
+    def selected_layers(self) -> List[Layer]:
+        """Returns all selected layers in frame, defaulting to active_layer if unassigned."""
+        indices = getattr(self, "_selected_layer_indices", None)
+        if not indices:
+            return [self.active_layer] if self.active_layer else []
+        result = []
+        for i in indices:
+            if 0 <= i < len(self.layers):
+                result.append(self.layers[i])
+        if self.active_layer and self.active_layer not in result:
+            result.insert(0, self.active_layer)
+        return result
+
     def add_layer(self, name: Optional[str] = None) -> Layer:
         if name is None:
             name = f"Layer {len(self.layers) + 1}"
@@ -262,6 +298,16 @@ class AnimationFrame:
         new_frame.layers = [l.clone() for l in self.layers]
         new_frame.active_layer_index = min(self.active_layer_index, max(0, len(new_frame.layers) - 1))
         return new_frame
+
+    def flip_horizontal(self, width: int) -> None:
+        """Flips all layers in frame horizontally."""
+        for layer in self.layers:
+            layer.flip_horizontal(width)
+
+    def flip_vertical(self, height: int) -> None:
+        """Flips all layers in frame vertically."""
+        for layer in self.layers:
+            layer.flip_vertical(height)
 
     def to_dict(self) -> dict:
         return {
@@ -372,11 +418,26 @@ class Animation:
             return True
         return False
 
-    def clone(self) -> "Animation":
-        anim = Animation(name=f"{self.name} Copy", fps=self.fps, pivot_x=self.pivot_x, pivot_y=self.pivot_y)
+    def clone(self, name: Optional[str] = None) -> "Animation":
+        anim_name = name if name is not None else f"{self.name} Copy"
+        anim = Animation(name=anim_name, fps=self.fps, pivot_x=self.pivot_x, pivot_y=self.pivot_y)
         anim.frames = [f.clone() for f in self.frames]
         anim.active_frame_index = min(self.active_frame_index, max(0, len(anim.frames) - 1))
         return anim
+
+    def flip_horizontal(self, width: int) -> None:
+        """Flips all frames in animation horizontally and mirrors pivot_x."""
+        for frame in self.frames:
+            frame.flip_horizontal(width)
+        if self.pivot_x is not None:
+            self.pivot_x = width - 1 - self.pivot_x
+
+    def flip_vertical(self, height: int) -> None:
+        """Flips all frames in animation vertically and mirrors pivot_y."""
+        for frame in self.frames:
+            frame.flip_vertical(height)
+        if self.pivot_y is not None:
+            self.pivot_y = height - 1 - self.pivot_y
 
     def to_dict(self) -> dict:
         return {
@@ -652,12 +713,84 @@ class PixelDocument:
     def move_layer_down(self, index: int) -> bool:
         return self.active_frame.move_layer_down(index)
 
+    @property
+    def selected_layers(self) -> List[Layer]:
+        return self.active_frame.selected_layers if self.active_frame else []
+
+    def set_selected_layer_indices(self, indices: List[int]) -> None:
+        if self.active_frame:
+            valid = [i for i in indices if 0 <= i < len(self.active_frame.layers)]
+            self.active_frame._selected_layer_indices = valid
+            if valid and self.active_layer_index not in valid:
+                self.active_layer_index = valid[0]
+
+    def get_combined_selected_layers_bbox(self) -> Optional[Tuple[int, int, int, int]]:
+        """Returns bounding box (x, y, w, h) spanning non-transparent pixels across all active/selected layers."""
+        all_pixels: Dict[str, str] = {}
+        for l in self.selected_layers:
+            if l and l.visible and not l.locked and l.pixels:
+                all_pixels.update(l.pixels)
+        if not all_pixels:
+            return None
+        xs, ys = [], []
+        for key in all_pixels.keys():
+            parts = key.split(",")
+            if len(parts) == 2:
+                xs.append(int(parts[0]))
+                ys.append(int(parts[1]))
+        if not xs:
+            return None
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        return (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+
     def crop_active_layer_to_canvas(self) -> int:
         """Crops current active layer to canvas dimensions (0, 0, width, height)."""
         active = self.active_layer
         if active:
             return active.crop_to_bounds(self.width, self.height)
         return 0
+
+    def flip_active_layer_horizontal(self) -> None:
+        """Flips active (and selected) layers horizontally across document canvas width."""
+        for layer in self.selected_layers:
+            if layer and not layer.locked:
+                layer.flip_horizontal(self.width)
+
+    def flip_active_layer_vertical(self) -> None:
+        """Flips active (and selected) layers vertically across document canvas height."""
+        for layer in self.selected_layers:
+            if layer and not layer.locked:
+                layer.flip_vertical(self.height)
+
+    def mirror_animation(self, anim_index: Optional[int] = None) -> Optional[Animation]:
+        """Duplicates animation ending in .R or .L with alternate suffix and flips all frames horizontally."""
+        if anim_index is None:
+            anim_index = self.active_animation_index
+        if not (0 <= anim_index < len(self.animations)):
+            return None
+
+        src = self.animations[anim_index]
+        name = src.name.strip()
+
+        if name.endswith(".R"):
+            alt_name = name[:-2] + ".L"
+        elif name.endswith(".r"):
+            alt_name = name[:-2] + ".l"
+        elif name.endswith(".L"):
+            alt_name = name[:-2] + ".R"
+        elif name.endswith(".l"):
+            alt_name = name[:-2] + ".r"
+        else:
+            alt_name = f"{name}_mirrored"
+
+        cloned = src.clone(name=alt_name)
+        cloned.flip_horizontal(self.width)
+
+        insert_pos = anim_index + 1
+        self.animations.insert(insert_pos, cloned)
+        self.active_animation_index = insert_pos
+        return cloned
 
     def is_valid_coord(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height

@@ -115,6 +115,32 @@ def test_pen_tool_mouse_interaction():
     assert doc.active_path.anchors[0].handle_in_y == 2.0
 
 
+def test_clicking_first_anchor_does_not_close_path():
+    app = QApplication.instance() or QApplication([])
+    doc = PixelDocument(32, 32)
+    pen = PenTool()
+
+    # Add 3 anchors
+    pen.mouse_press(doc, 5, 5, "#FF0000FF", "#000000FF")
+    pen.mouse_release(doc, 5, 5, "#FF0000FF", "#000000FF")
+    pen.mouse_press(doc, 15, 5, "#FF0000FF", "#000000FF")
+    pen.mouse_release(doc, 15, 5, "#FF0000FF", "#000000FF")
+    pen.mouse_press(doc, 10, 15, "#FF0000FF", "#000000FF")
+    pen.mouse_release(doc, 10, 15, "#FF0000FF", "#000000FF")
+
+    assert doc.active_path.closed is False
+
+    # Click first anchor (5, 5) — must NOT close loop automatically
+    pen.mouse_press(doc, 5, 5, "#FF0000FF", "#000000FF")
+    pen.mouse_release(doc, 5, 5, "#FF0000FF", "#000000FF")
+
+    assert doc.active_path.closed is False
+
+    # Path loop toggles explicitly via path.closed property / PathPanel checkbox
+    doc.active_path.closed = True
+    assert doc.active_path.closed is True
+
+
 
 
 def test_path_panel_ui():

@@ -128,7 +128,12 @@ class SpritesheetViewer(QWidget):
         global_fh: int = 32,
     ) -> None:
         self._configs = configs
-        self._selected_indices = set(selected_indices)
+        if isinstance(selected_indices, int):
+            self._selected_indices = {selected_indices}
+        elif selected_indices is not None:
+            self._selected_indices = set(selected_indices)
+        else:
+            self._selected_indices = set()
         self._global_fw = max(1, global_fw)
         self._global_fh = max(1, global_fh)
         self.update()

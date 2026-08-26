@@ -6,6 +6,7 @@ from typing import Optional
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDockWidget,
     QHBoxLayout,
@@ -152,7 +153,9 @@ class LayerPanel(QDockWidget):
 
         # 2. Layer List
         self.list_widget = LayerListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
+        self.list_widget.itemSelectionChanged.connect(self._on_item_selection_changed)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._on_context_menu)
@@ -186,6 +189,9 @@ class LayerPanel(QDockWidget):
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
 
+        selected_layers = self.doc.selected_layers
+        selected_indices = {self.doc.layers.index(l) for l in selected_layers if l in self.doc.layers}
+
         # Display layers in descending index order (top layer first)
         for i in reversed(range(len(self.doc.layers))):
             layer = self.doc.layers[i]
@@ -200,6 +206,9 @@ class LayerPanel(QDockWidget):
             item.setSizeHint(widget.sizeHint())
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, widget)
+
+            if i in selected_indices:
+                item.setSelected(True)
 
             if i == self.doc.active_layer_index:
                 self.list_widget.setCurrentItem(item)
@@ -218,6 +227,14 @@ class LayerPanel(QDockWidget):
     # ------------------------------------------------------------------
     # Internal slots (not history-emitting selection change)
     # ------------------------------------------------------------------
+
+    def _on_item_selection_changed(self) -> None:
+        """Handles multi-layer row selection in the layer list."""
+        selected_items = self.list_widget.selectedItems()
+        indices = [item.data(Qt.UserRole) for item in selected_items if item.data(Qt.UserRole) is not None]
+        if indices:
+            self.doc.set_selected_layer_indices(indices)
+            self.layer_visual_changed.emit()
 
     def _on_row_changed(self, row: int) -> None:
         """Switches active layer — does NOT push history."""
@@ -305,6 +322,9 @@ class LayerPanel(QDockWidget):
         paste_act = menu.addAction("📥 Paste Layer")
         paste_act.setEnabled(getattr(LayerPanel, "_shared_layer_clipboard", None) is not None)
         menu.addSeparator()
+        flip_h_act = menu.addAction("↔ Flip Horizontal")
+        flip_v_act = menu.addAction("↕ Flip Vertical")
+        menu.addSeparator()
         sel_content_act = menu.addAction("🎯 Select Layer Content")
         tag_act = menu.addAction("🏷️ Set Tag...")
         dup_act = menu.addAction("📑 Duplicate Layer")
@@ -317,6 +337,10 @@ class LayerPanel(QDockWidget):
             self.on_copy_layer()
         elif action == paste_act:
             self.on_paste_layer()
+        elif action == flip_h_act:
+            self.on_flip_layer_horizontal()
+        elif action == flip_v_act:
+            self.on_flip_layer_vertical()
         elif action == sel_content_act:
             self.select_layer_content_requested.emit(self.doc.active_layer_index)
         elif action == tag_act:
@@ -329,6 +353,16 @@ class LayerPanel(QDockWidget):
             self.on_crop_layer_to_canvas()
         elif action == del_act:
             self.on_delete_layer()
+
+    def on_flip_layer_horizontal(self) -> None:
+        self.doc.flip_active_layer_horizontal()
+        self.refresh_list()
+        self.layer_structure_changed.emit()
+
+    def on_flip_layer_vertical(self) -> None:
+        self.doc.flip_active_layer_vertical()
+        self.refresh_list()
+        self.layer_structure_changed.emit()
 
     def _on_ctrl_click_layer(self, index: int) -> None:
         if 0 <= index < len(self.doc.layers):

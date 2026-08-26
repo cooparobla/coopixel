@@ -30,7 +30,7 @@ class PenTool(Tool):
         self.is_dragging_handle: bool = False
 
     def _find_target(
-        self, path: VectorPath, x: float, y: float, threshold: float = 1.5
+        self, path: VectorPath, x: float, y: float, threshold: float = 2.5
     ) -> Tuple[Optional[int], Optional[str]]:
         """
         Finds if (x, y) is near an anchor point or control handle.
@@ -41,12 +41,21 @@ class PenTool(Tool):
             anchor = path.anchors[self.selected_anchor_idx]
             # Check handle_in
             hin = anchor.handle_in_abs
-            if math.hypot(x - hin.x(), y - hin.y()) <= threshold:
+            if math.hypot(x - hin.x(), y - hin.y()) <= threshold and (anchor.handle_in_x != 0 or anchor.handle_in_y != 0):
                 return self.selected_anchor_idx, "handle_in"
             # Check handle_out
             hout = anchor.handle_out_abs
-            if math.hypot(x - hout.x(), y - hout.y()) <= threshold:
+            if math.hypot(x - hout.x(), y - hout.y()) <= threshold and (anchor.handle_out_x != 0 or anchor.handle_out_y != 0):
                 return self.selected_anchor_idx, "handle_out"
+
+        # Check handles across all anchors if not found on active
+        for idx, anchor in enumerate(path.anchors):
+            hin = anchor.handle_in_abs
+            if math.hypot(x - hin.x(), y - hin.y()) <= threshold and (anchor.handle_in_x != 0 or anchor.handle_in_y != 0):
+                return idx, "handle_in"
+            hout = anchor.handle_out_abs
+            if math.hypot(x - hout.x(), y - hout.y()) <= threshold and (anchor.handle_out_x != 0 or anchor.handle_out_y != 0):
+                return idx, "handle_out"
 
         # Next check anchor positions
         for idx, anchor in enumerate(path.anchors):
@@ -88,36 +97,42 @@ class PenTool(Tool):
             path.stroke_color = primary_color
             path.fill_color = primary_color
 
-
+        self.initial_path_anchors = [(a.x, a.y) for a in path.anchors]
         fx, fy = float(x), float(y)
         target_idx, target_type = self._find_target(path, fx, fy)
 
         if target_idx is not None:
-            # Check if clicking on first anchor point to close loop
-            if target_idx == 0 and len(path.anchors) >= 3 and not path.closed and target_type == "anchor":
-                path.closed = True
-                self.selected_anchor_idx = 0
-                self.selected_handle = "anchor"
-                self.is_dragging_handle = False
-                return True
-
             self.selected_anchor_idx = target_idx
             self.selected_handle = target_type
+
             if target_type == "anchor":
-                # Shift-click alters Bezier curve handles; normal click moves node position
                 if shift_pressed:
+                    # Shift+click on anchor point pulls out symmetric smooth Bezier handles
                     self.is_dragging_handle = True
+                    self.selected_handle = "handle_out"
                 else:
                     self.is_dragging_handle = False
-            return True
+                    self.selected_handle = "anchor"
+            else:
+                # Clicked on control handle knob ("handle_in" or "handle_out")
+                self.is_dragging_handle = False
 
+            return True
 
         # Clicked empty space -> Add new anchor point
         new_anchor = AnchorPoint(fx, fy)
         path.add_anchor(new_anchor)
         self.selected_anchor_idx = len(path.anchors) - 1
-        self.selected_handle = "handle_out"
-        self.is_dragging_handle = True
+
+        if shift_pressed:
+            # Shift+click in empty space creates point and pulls out smooth Bezier handles
+            self.selected_handle = "handle_out"
+            self.is_dragging_handle = True
+        else:
+            self.selected_handle = "anchor"
+            self.is_dragging_handle = False
+
+        self.initial_path_anchors = [(a.x, a.y) for a in path.anchors]
         return True
 
     def mouse_move(
@@ -130,6 +145,9 @@ class PenTool(Tool):
         size: int = 1,
         filled: bool = False,
         selection: Optional["SelectionModel"] = None,
+        shift_pressed: bool = False,
+        ctrl_pressed: bool = False,
+        alt_pressed: bool = False,
         *args: Any,
         **kwargs: Any,
     ) -> bool:
@@ -146,24 +164,42 @@ class PenTool(Tool):
         anchor = path.anchors[self.selected_anchor_idx]
         fx, fy = float(x), float(y)
 
+        # 1. Dragging symmetric handles via Shift+drag on anchor point
         if self.is_dragging_handle:
-            # Dragging outgoing handle & symmetric incoming handle
             anchor.set_handle_out_abs(fx, fy)
             anchor.set_handle_in_abs(2 * anchor.x - fx, 2 * anchor.y - fy)
             return True
 
-        if self.selected_handle == "anchor":
-            anchor.x = fx
-            anchor.y = fy
-            return True
-
+        # 2. Dragging specific handle knobs ("handle_in" or "handle_out")
         if self.selected_handle == "handle_in":
             anchor.set_handle_in_abs(fx, fy)
+            if shift_pressed:
+                # Shift preserves symmetric opposite handle
+                anchor.set_handle_out_abs(2 * anchor.x - fx, 2 * anchor.y - fy)
             return True
 
         if self.selected_handle == "handle_out":
             anchor.set_handle_out_abs(fx, fy)
+            if shift_pressed:
+                # Shift preserves symmetric opposite handle
+                anchor.set_handle_in_abs(2 * anchor.x - fx, 2 * anchor.y - fy)
             return True
+
+        # 3. Moving anchor node position
+        if self.selected_handle == "anchor":
+            dx = fx - float(self.start_x)
+            dy = fy - float(self.start_y)
+            if ctrl_pressed or alt_pressed:
+                # Move ALL nodes in the path together
+                if hasattr(self, "initial_path_anchors") and len(self.initial_path_anchors) == len(path.anchors):
+                    for idx, (orig_x, orig_y) in enumerate(self.initial_path_anchors):
+                        path.anchors[idx].x = orig_x + dx
+                        path.anchors[idx].y = orig_y + dy
+                return True
+            else:
+                anchor.x = fx
+                anchor.y = fy
+                return True
 
         return False
 

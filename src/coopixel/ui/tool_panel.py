@@ -105,8 +105,8 @@ class ToolPanel(QFrame):
             ("move",      "🖐️", "Move Tool (V)"),
             ("selection", "🔲", "Selection Tool (S)"),
             ("draw",      "✏️", "Draw Tool (D)"),
-            ("pen",       "🖋️", "Pen Tool: Vector paths & Bezier curves"),
-            ("pivot",     "📌", "Pivot Tool (P): Position active frame pivot point"),
+            ("pen",       "🖋️", "Pen Tool (P): Vector paths & Bezier curves"),
+            ("pivot",     "📌", "Pivot Tool (Shift+P): Position active frame pivot point"),
             ("eraser",    "🧹", "Eraser Tool (E)"),
             ("picker",    "🧪", "Color Picker (I)"),
             ("fill",      "🪣", "Bucket Fill Tool (F)"),
@@ -128,6 +128,9 @@ class ToolPanel(QFrame):
         main_layout.addLayout(tools_layout)
         main_layout.addWidget(_vline())
 
+        self.current_tool_key: str = "selection"
+        self.tool_sizes: Dict[str, int] = {}
+
         # ---- Brush Size ----
         size_lbl = QLabel("Size:")
         size_lbl.setStyleSheet("color: #94A3B8; font-weight: 500;")
@@ -135,7 +138,7 @@ class ToolPanel(QFrame):
         self.size_spin.setRange(1, 32)
         self.size_spin.setValue(1)
         self.size_spin.setSuffix(" px")
-        self.size_spin.valueChanged.connect(self.brush_size_changed.emit)
+        self.size_spin.valueChanged.connect(self._on_spin_size_changed)
         main_layout.addWidget(size_lbl)
         main_layout.addWidget(self.size_spin)
 
@@ -478,6 +481,8 @@ class ToolPanel(QFrame):
         if actual_key not in self.tools:
             return
 
+        self.current_tool_key = tool_key
+
         tool = self.tools[actual_key]
         idx = self._tool_order.index(actual_key) if actual_key in self._tool_order else -1
         if idx >= 0:
@@ -486,7 +491,31 @@ class ToolPanel(QFrame):
                 btns[idx].setChecked(True)
         self._on_tool_clicked(tool, actual_key)
 
+    def _on_spin_size_changed(self, val: int) -> None:
+        if self.current_tool_key == "pen":
+            if val != 1:
+                self.size_spin.blockSignals(True)
+                self.size_spin.setValue(1)
+                self.size_spin.blockSignals(False)
+                val = 1
+        else:
+            self.tool_sizes[self.current_tool_key] = val
+        self.brush_size_changed.emit(val)
+
     def _on_tool_clicked(self, tool: Tool, key: str) -> None:
+        if not hasattr(self, "current_tool_key") or self.current_tool_key is None:
+            self.current_tool_key = key
+
+        if self.current_tool_key == "pen":
+            target_size = 1
+        else:
+            target_size = self.tool_sizes.get(self.current_tool_key, 1)
+
+        self.size_spin.blockSignals(True)
+        self.size_spin.setValue(target_size)
+        self.size_spin.blockSignals(False)
+        self.brush_size_changed.emit(target_size)
+
         if key in ("draw", "pencil"):
             self.ctx_stack.setCurrentIndex(0)
         elif key == "selection":
@@ -507,6 +536,7 @@ class ToolPanel(QFrame):
 
     def _on_draw_mode(self, mode: str) -> None:
         self.draw_tool.mode = mode
+        self.select_tool_by_key(mode)
 
     def _update_draw_mode_buttons(self) -> None:
         if hasattr(self, "_draw_mode_btns") and self.draw_tool.mode in self._draw_mode_btns:

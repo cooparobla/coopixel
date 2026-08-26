@@ -1,17 +1,17 @@
 """
 Move tool for Coopixel pixel art editor.
-Shifts the active layer pixels (and active selection) interactively across the canvas.
+Shifts active/selected layers' pixels (and active selection) interactively across the canvas.
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 from PySide6.QtCore import QPointF
-from coopixel.models.document import PixelDocument
+from coopixel.models.document import Layer, PixelDocument
 from coopixel.models.selection import SelectionModel
 from coopixel.tools.base import Tool
 
 
 class MoveTool(Tool):
-    """Tool for moving or resizing active layer pixels (or active vector path when Paths Panel is open) by dragging or nudging."""
+    """Tool for moving or resizing active and selected layers' pixels (or active vector path when Paths Panel is open) by dragging or nudging."""
 
     name: str = "move"
     display_name: str = "Move Tool"
@@ -19,7 +19,7 @@ class MoveTool(Tool):
     def __init__(self):
         super().__init__()
         self.drag_start: Optional[Tuple[int, int]] = None
-        self.initial_pixels: Dict[str, str] = {}
+        self.initial_layers_pixels: List[Tuple[Layer, Dict[str, str]]] = []
         self.initial_selection: Optional[Set[Tuple[int, int]]] = None
         self.is_resizing: bool = False
         self.initial_bbox: Optional[Tuple[int, int, int, int]] = None
@@ -35,11 +35,11 @@ class MoveTool(Tool):
         zoom: float,
         tolerance: float = 8.0,
     ) -> bool:
-        """Determines if the given screen position is hovering over the active layer's bottom-right resize handle."""
-        active = doc.active_layer
-        if not active or active.locked or not active.visible or not active.pixels:
+        """Determines if the given screen position is hovering over the selected layers' bottom-right resize handle."""
+        target_layers = [l for l in doc.selected_layers if l and not l.locked and l.visible and l.pixels]
+        if not target_layers:
             return False
-        bbox = active.get_content_bbox()
+        bbox = doc.get_combined_selected_layers_bbox()
         if not bbox:
             return False
         bx, by, bw, bh = bbox
@@ -67,21 +67,21 @@ class MoveTool(Tool):
         self.is_drawing = True
         self.drag_start = (x, y)
 
-        if path_panel_open and doc.active_path:
+        if doc.active_path and (path_panel_open or len(doc.active_path.anchors) > 0):
             self.moving_path = True
             self.initial_anchors = [(a.x, a.y) for a in doc.active_path.anchors]
             self.is_resizing = False
             self.initial_bbox = None
-            self.initial_pixels = {}
+            self.initial_layers_pixels = []
             self.initial_selection = None
             return True
 
         self.moving_path = False
         self.initial_anchors = []
-        active = doc.active_layer
+        target_layers = [l for l in doc.selected_layers if l and not l.locked and l.visible]
 
-        if active and not active.locked and active.visible and active.pixels:
-            bbox = active.get_content_bbox()
+        if target_layers:
+            bbox = doc.get_combined_selected_layers_bbox()
             if bbox:
                 if screen_pos is not None and pan_offset is not None:
                     hit_handle = self.is_over_resize_handle(doc, screen_pos, pan_offset, zoom)
@@ -98,19 +98,18 @@ class MoveTool(Tool):
             else:
                 self.is_resizing = False
                 self.initial_bbox = None
-        else:
-            self.is_resizing = False
-            self.initial_bbox = None
 
-        if active and not active.locked and active.visible:
-            self.initial_pixels = dict(active.pixels)
+            self.initial_layers_pixels = [(l, dict(l.pixels)) for l in target_layers]
             if selection and not selection.is_empty():
                 self.initial_selection = set(selection.selected)
             else:
                 self.initial_selection = None
         else:
-            self.initial_pixels = {}
+            self.is_resizing = False
+            self.initial_bbox = None
+            self.initial_layers_pixels = []
             self.initial_selection = None
+
         return False
 
     def mouse_move(
@@ -139,8 +138,7 @@ class MoveTool(Tool):
                     doc.active_path.anchors[idx].y = ay + dy
             return True
 
-        active = doc.active_layer
-        if not active or active.locked or not active.visible:
+        if not self.initial_layers_pixels:
             return False
 
         if self.is_resizing and self.initial_bbox:
@@ -153,6 +151,29 @@ class MoveTool(Tool):
                 new_w = side
                 new_h = side
 
+            for layer, orig_px in self.initial_layers_pixels:
+                new_pixels: Dict[str, str] = {}
+                for coord_str, color_hex in orig_px.items():
+                    parts = coord_str.split(",")
+                    if len(parts) == 2:
+                        px, py = int(parts[0]), int(parts[1])
+                        if bx <= px < bx + bw and by <= py < by + bh:
+                            rel_x = px - bx
+                            rel_y = py - by
+                            nx_start = int(rel_x * new_w / bw)
+                            nx_end = max(nx_start + 1, int((rel_x + 1) * new_w / bw))
+                            ny_start = int(rel_y * new_h / bh)
+                            ny_end = max(ny_start + 1, int((rel_y + 1) * new_h / bh))
+                            for nx in range(nx_start, nx_end):
+                                for ny in range(ny_start, ny_end):
+                                    target_x = bx + nx
+                                    target_y = by + ny
+                                    new_pixels[f"{target_x},{target_y}"] = color_hex
+                        else:
+                            dx_shift = x - self.drag_start[0]
+                            dy_shift = y - self.drag_start[1]
+                            new_pixels[f"{px + dx_shift},{py + dy_shift}"] = color_hex
+                layer.pixels = new_pixels
 
             # Resample selection mask if active
             if selection and self.initial_selection is not None:
@@ -183,15 +204,16 @@ class MoveTool(Tool):
         dx_val = x - self.drag_start[0]
         dy_val = y - self.drag_start[1]
 
-        # Shift layer pixels relative to initial state
-        new_pixels: Dict[str, str] = {}
-        for coord_str, color_hex in self.initial_pixels.items():
-            parts = coord_str.split(",")
-            if len(parts) == 2:
-                px, py = int(parts[0]), int(parts[1])
-                nx, ny = px + dx_val, py + dy_val
-                new_pixels[f"{nx},{ny}"] = color_hex
-        active.pixels = new_pixels
+        # Shift all target layers' pixels relative to their initial state
+        for layer, orig_px in self.initial_layers_pixels:
+            new_pixels: Dict[str, str] = {}
+            for coord_str, color_hex in orig_px.items():
+                parts = coord_str.split(",")
+                if len(parts) == 2:
+                    px, py = int(parts[0]), int(parts[1])
+                    nx, ny = px + dx_val, py + dy_val
+                    new_pixels[f"{nx},{ny}"] = color_hex
+            layer.pixels = new_pixels
 
         # If active selection exists, also shift selection mask
         if selection and self.initial_selection is not None:
@@ -222,7 +244,7 @@ class MoveTool(Tool):
         self.initial_anchors = []
         self.initial_bbox = None
         self.drag_start = None
-        self.initial_pixels = {}
+        self.initial_layers_pixels = []
         self.initial_selection = None
         return was_drawing
 
@@ -234,25 +256,26 @@ class MoveTool(Tool):
         selection: Optional[SelectionModel] = None,
         path_panel_open: bool = False,
     ) -> bool:
-        """Nudges active layer pixels (or active vector path when Paths Panel is open) by dx, dy."""
+        """Nudges active and selected layers' pixels (or active vector path when Paths Panel is open) by dx, dy."""
         if path_panel_open and doc.active_path:
             for anchor in doc.active_path.anchors:
                 anchor.x += float(dx)
                 anchor.y += float(dy)
             return True
 
-        active = doc.active_layer
-        if not active or active.locked or not active.visible:
+        target_layers = [l for l in doc.selected_layers if l and not l.locked and l.visible]
+        if not target_layers:
             return False
 
-        new_pixels: Dict[str, str] = {}
-        for coord_str, color_hex in active.pixels.items():
-            parts = coord_str.split(",")
-            if len(parts) == 2:
-                px, py = int(parts[0]), int(parts[1])
-                nx, ny = px + dx, py + dy
-                new_pixels[f"{nx},{ny}"] = color_hex
-        active.pixels = new_pixels
+        for layer in target_layers:
+            new_pixels: Dict[str, str] = {}
+            for coord_str, color_hex in layer.pixels.items():
+                parts = coord_str.split(",")
+                if len(parts) == 2:
+                    px, py = int(parts[0]), int(parts[1])
+                    nx, ny = px + dx, py + dy
+                    new_pixels[f"{nx},{ny}"] = color_hex
+            layer.pixels = new_pixels
 
         if selection and not selection.is_empty():
             new_sel = set()
@@ -263,5 +286,3 @@ class MoveTool(Tool):
             selection.selected = new_sel
 
         return True
-
-

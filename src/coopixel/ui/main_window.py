@@ -32,6 +32,7 @@ from coopixel.ui.color_panel import ColorPanel
 from coopixel.ui.dialogs import AboutDialog, CanvasSizeDialog, CropCanvasDialog, ImportImageDialog, NewCanvasDialog
 from coopixel.ui.layer_panel import LayerPanel
 from coopixel.ui.path_panel import PathPanel
+from coopixel.ui.shortcuts_dialog import ShortcutsDialog, load_shortcuts
 from coopixel.ui.spritesheet_import_dialog import SpritesheetImportDialog
 from coopixel.ui.tag_panel import TagPanel
 from coopixel.ui.tool_panel import ToolPanel
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("COOPIXEL")
         self.resize(1280, 820)
+        self.actions_by_id: dict = {}
 
         # Set window icon
         pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -376,6 +378,12 @@ class MainWindow(QMainWindow):
         sel_layer_act.triggered.connect(lambda: self.on_select_layer_content())
         edit_menu.addAction(sel_layer_act)
 
+        edit_menu.addSeparator()
+
+        shortcuts_act = QAction("Keyboard &Shortcuts...", self)
+        shortcuts_act.triggered.connect(self.on_open_shortcuts_dialog)
+        edit_menu.addAction(shortcuts_act)
+
         # ---- IMAGE ----
         image_menu = menu_bar.addMenu("&Image")
 
@@ -419,12 +427,12 @@ class MainWindow(QMainWindow):
         self.addAction(pencil_tool_act)
 
         pen_tool_act = QAction("Pen Tool", self)
-        pen_tool_act.setShortcut(QKeySequence("Shift+P"))
+        pen_tool_act.setShortcut(QKeySequence("P"))
         pen_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pen"))
         self.addAction(pen_tool_act)
 
         pivot_tool_act = QAction("Pivot Tool", self)
-        pivot_tool_act.setShortcut(QKeySequence("P"))
+        pivot_tool_act.setShortcut(QKeySequence("Shift+P"))
         pivot_tool_act.triggered.connect(lambda: self.tool_panel.select_tool_by_key("pivot"))
         self.addAction(pivot_tool_act)
 
@@ -614,13 +622,60 @@ class MainWindow(QMainWindow):
 
         # ---- WINDOW ----
         window_menu = menu_bar.addMenu("&Window")
-
         self.show_bounds_act = QAction("Show &Active Layer Content Bounds", self)
         self.show_bounds_act.setCheckable(True)
         self.show_bounds_act.setChecked(True)
         self.show_bounds_act.setShortcut(QKeySequence("Ctrl+Shift+B"))
         self.show_bounds_act.triggered.connect(self._on_toggle_bounds_clicked)
         window_menu.addAction(self.show_bounds_act)
+
+        # Register actions map for shortcuts config
+        self.actions_by_id = {
+            "file_new": new_act,
+            "file_open": open_act,
+            "file_save": save_act,
+            "file_save_as": save_as_act,
+            "file_import_layer": import_act,
+            "file_import_palette": import_pal_act,
+            "file_export": export_act,
+            "file_exit": exit_act,
+            "edit_undo": self.undo_act,
+            "edit_redo": self.redo_act,
+            "edit_cut": cut_act,
+            "edit_copy": copy_act,
+            "edit_paste": paste_act,
+            "edit_select_all": sel_all_act,
+            "edit_deselect": desel_act,
+            "edit_invert_selection": invert_sel_act,
+            "edit_select_layer_content": sel_layer_act,
+            "crop_canvas_dialog": crop_dialog_act,
+            "tool_crop": crop_tool_act,
+            "tool_move": move_tool_act,
+            "tool_selection": sel_tool_act,
+            "tool_pencil": pencil_tool_act,
+            "tool_pen": pen_tool_act,
+            "tool_pivot": pivot_tool_act,
+            "tool_eraser": eraser_tool_act,
+            "tool_picker": picker_tool_act,
+            "tool_fill": fill_tool_act,
+            "tool_line": line_tool_act,
+            "tool_rect": rect_tool_act,
+            "tool_circle": circle_tool_act,
+            "decrease_size": decrease_size_act,
+            "increase_size": increase_size_act,
+            "zoom_in": zoom_in_act,
+            "zoom_out": zoom_out_act,
+            "zoom_reset": reset_zoom_act,
+            "center_canvas": center_canvas_act,
+            "toggle_grid": self.grid_act,
+            "toggle_bounds": self.show_bounds_act,
+            "add_layer": add_l_act,
+            "delete_layer": del_l_act,
+            "copy_layer": copy_l_act,
+            "paste_layer": paste_l_act,
+            "play_animation": play_act,
+        }
+        self._apply_shortcuts()
 
         window_menu.addSeparator()
 
@@ -1184,6 +1239,17 @@ class MainWindow(QMainWindow):
         self.canvas.selection.select_layer_pixels(layer, self.doc)
         self.on_selection_committed()
         self.status_bar.showMessage(f"Selected content pixels on layer '{layer.name}'", 1500)
+
+    def _apply_shortcuts(self) -> None:
+        shortcuts = load_shortcuts()
+        for act_id, shortcut_str in shortcuts.items():
+            if act_id in self.actions_by_id:
+                self.actions_by_id[act_id].setShortcut(QKeySequence(shortcut_str))
+
+    def on_open_shortcuts_dialog(self) -> None:
+        dlg = ShortcutsDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            self._apply_shortcuts()
 
     def on_copy(self) -> None:
         """Copies selected pixels (or active layer pixels) to clipboard."""
