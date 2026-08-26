@@ -429,8 +429,6 @@ class PixelDocument:
         self.active_path_index = len(self.paths) - 1
         return vp
 
-
-
     def remove_path(self, index: int) -> bool:
         if 0 <= index < len(self.paths):
             del self.paths[index]
