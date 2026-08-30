@@ -48,19 +48,15 @@ def flood_fill_coords(doc: PixelDocument, layer, x: int, y: int) -> Set[Tuple[in
         return set()
     target_color = layer.get_pixel(x, y)
     queue = deque([(x, y)])
-    visited: Set[Tuple[int, int]] = set()
+    visited: Set[Tuple[int, int]] = {(x, y)}
     result: Set[Tuple[int, int]] = set()
     while queue:
         cx, cy = queue.popleft()
-        if (cx, cy) in visited:
-            continue
-        visited.add((cx, cy))
-        if not doc.is_valid_coord(cx, cy):
-            continue
         if layer.get_pixel(cx, cy) == target_color:
             result.add((cx, cy))
             for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
-                if (nx, ny) not in visited:
+                if (nx, ny) not in visited and doc.is_valid_coord(nx, ny):
+                    visited.add((nx, ny))
                     queue.append((nx, ny))
     return result
 
@@ -84,31 +80,39 @@ class PencilTool(Tool):
 
     def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
-        for px, py in get_brush_coords(x, y, size):
-            if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
-                layer.set_pixel(px, py, primary_color)
+        coords = [c for c in get_brush_coords(x, y, size) if doc.is_valid_coord(c[0], c[1]) and is_pixel_editable(selection, c[0], c[1])]
+        if coords:
+            for layer in layers:
+                for px, py in coords:
+                    layer.set_pixel(px, py, primary_color)
                 changed = True
         return changed
 
     def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         if not self.is_drawing:
             return False
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
         line_points = bresenham_line(self.last_x, self.last_y, x, y)
+        coords = []
         for lx, ly in line_points:
             for px, py in get_brush_coords(lx, ly, size):
                 if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
+                    coords.append((px, py))
+
+        if coords:
+            for layer in layers:
+                for px, py in coords:
                     layer.set_pixel(px, py, primary_color)
-                    changed = True
+                changed = True
 
         self.last_x = x
         self.last_y = y
@@ -121,31 +125,41 @@ class EraserTool(Tool):
 
     def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
-        for px, py in get_brush_coords(x, y, size):
-            if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
-                layer.clear_pixel(px, py)
-                changed = True
+        coords = [c for c in get_brush_coords(x, y, size) if doc.is_valid_coord(c[0], c[1]) and is_pixel_editable(selection, c[0], c[1])]
+        if coords:
+            for layer in layers:
+                for px, py in coords:
+                    if layer.has_pixel(px, py):
+                        layer.clear_pixel(px, py)
+                        changed = True
         return changed
 
     def mouse_move(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         if not self.is_drawing:
             return False
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
         line_points = bresenham_line(self.last_x, self.last_y, x, y)
+        coords = []
         for lx, ly in line_points:
             for px, py in get_brush_coords(lx, ly, size):
                 if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
-                    layer.clear_pixel(px, py)
-                    changed = True
+                    coords.append((px, py))
+
+        if coords:
+            for layer in layers:
+                for px, py in coords:
+                    if layer.has_pixel(px, py):
+                        layer.clear_pixel(px, py)
+                        changed = True
 
         self.last_x = x
         self.last_y = y
@@ -167,24 +181,25 @@ class BucketFillTool(Tool):
 
     def mouse_press(self, doc: PixelDocument, x: int, y: int, primary_color: str, secondary_color: str, size: int = 1, filled: bool = False, selection=None, *args, **kwargs) -> bool:
         super().mouse_press(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible or not doc.is_valid_coord(x, y):
+        layers = doc.editable_layers
+        if not layers or not doc.is_valid_coord(x, y):
             return False
-
-        target_color = layer.get_pixel(x, y)
-        if target_color == primary_color:
-            return False
-
-        if self.fill_mode == self.CONTIGUOUS:
-            coords = flood_fill_coords(doc, layer, x, y)
-        else:
-            coords = fill_all_coords(doc, layer, x, y)
 
         changed = False
-        for cx, cy in coords:
-            if is_pixel_editable(selection, cx, cy):
-                layer.set_pixel(cx, cy, primary_color)
-                changed = True
+        for layer in layers:
+            target_color = layer.get_pixel(x, y)
+            if target_color == primary_color:
+                continue
+
+            if self.fill_mode == self.CONTIGUOUS:
+                coords = flood_fill_coords(doc, layer, x, y)
+            else:
+                coords = fill_all_coords(doc, layer, x, y)
+
+            for cx, cy in coords:
+                if is_pixel_editable(selection, cx, cy):
+                    layer.set_pixel(cx, cy, primary_color)
+                    changed = True
 
         return changed
 

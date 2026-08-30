@@ -3,7 +3,7 @@ Interactive Pixel Canvas Widget for Coopixel.
 Handles zooming, panning, grid rendering, checkerboard background, tool interaction, and live preview.
 """
 
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal, QTimer
 from PySide6.QtGui import (
     QBrush,
@@ -81,6 +81,17 @@ class CanvasWidget(QWidget):
         # Composite rendering cache
         self._cached_composite_image: Optional[QImage] = None
 
+        # Canvas background settings (checkerboard pattern or solid color)
+        try:
+            from PySide6.QtCore import QSettings
+            settings = QSettings("coopixel", "coopixel")
+            self.bg_mode = str(settings.value("canvas_bg_mode", "checker_dark"))
+            saved_color = settings.value("canvas_bg_color", "#1E293B")
+            self.bg_color = QColor(saved_color) if saved_color else QColor("#1E293B")
+        except Exception:
+            self.bg_mode = "checker_dark"
+            self.bg_color = QColor("#1E293B")
+
         # Checkerboard tile cache — keyed by square_size (float)
         self._checker_pixmap: Optional[QPixmap] = None
         self._checker_square_size: float = -1.0
@@ -96,6 +107,9 @@ class CanvasWidget(QWidget):
     def invalidate_cache(self) -> None:
         """Invalidate the cached composite QImage buffer."""
         self._cached_composite_image = None
+        self._render_cache = None
+        if hasattr(self, "doc") and self.doc:
+            self.doc.invalidate_render_cache(self.doc.active_frame_index)
 
     def get_composite_image(self) -> QImage:
         """Returns cached composite QImage or renders fresh if dirty."""
@@ -171,19 +185,51 @@ class CanvasWidget(QWidget):
         py = int(rel_y // self.zoom_level)
         return px, py
 
+    def set_canvas_background(self, mode: str = "checker_dark", color: Any = None) -> None:
+        """Sets canvas background pattern or solid color and persists setting."""
+        self.bg_mode = mode
+        if isinstance(color, str):
+            self.bg_color = QColor(color)
+        elif isinstance(color, QColor) and color.isValid():
+            self.bg_color = color
+
+        try:
+            from PySide6.QtCore import QSettings
+            settings = QSettings("coopixel", "coopixel")
+            settings.setValue("canvas_bg_mode", self.bg_mode)
+            settings.setValue("canvas_bg_color", self.bg_color.name(QColor.HexArgb))
+        except Exception:
+            pass
+
+        self._checker_pixmap = None
+        self.update()
+
     def draw_checkerboard(self, painter: QPainter, rect: QRectF) -> None:
-        """Draws a subtle dark checkerboard using a cached QPixmap tile for GPU-accelerated tiling."""
+        """Draws transparency background pattern or solid color behind document canvas."""
+        if getattr(self, "bg_mode", "checker_dark") == "solid":
+            painter.fillRect(rect, getattr(self, "bg_color", QColor("#141414")))
+            return
+
         square_size = max(4.0, self.zoom_level / 2.0)
 
-        # Rebuild tile only when square_size changes
+        # Rebuild tile only when square_size or bg_mode changes
         if self._checker_pixmap is None or square_size != self._checker_square_size:
             tile_px = int(round(square_size * 2))  # tile = 2x2 checker squares
             tile_img = QImage(tile_px, tile_px, QImage.Format_RGB32)
-            c1 = QColor("#222222")
-            c2 = QColor("#1A1A1A")
+
+            mode = getattr(self, "bg_mode", "checker_dark")
+            if mode == "checker_light":
+                c1 = QColor("#FFFFFF")
+                c2 = QColor("#E0E0E0")
+            elif mode == "checker_medium":
+                c1 = QColor("#808080")
+                c2 = QColor("#666666")
+            else:  # "checker_dark" default
+                c1 = QColor("#222222")
+                c2 = QColor("#1A1A1A")
+
             sq = int(round(square_size))
             tile_img.fill(c1)
-            # Fill the two squares that differ from c1
             tile_painter = QPainter(tile_img)
             tile_painter.fillRect(0, sq, sq, sq, c2)
             tile_painter.fillRect(sq, 0, sq, sq, c2)
@@ -900,6 +946,20 @@ class CanvasWidget(QWidget):
 
         if event.key() == Qt.Key_A:
             self.center_canvas()
+            return
+
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and hasattr(self, "selection") and not self.selection.is_empty():
+            layers = self.doc.editable_layers
+            changed = False
+            for layer in layers:
+                for (px, py) in self.selection.selected:
+                    if layer.has_pixel(px, py):
+                        layer.clear_pixel(px, py)
+                        changed = True
+            if changed:
+                self.invalidate_cache()
+                self.stroke_committed.emit()
+                self.update()
             return
 
         if event.key() == Qt.Key_Escape and not self.selection.is_empty():

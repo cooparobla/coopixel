@@ -132,6 +132,11 @@ class LayerPanel(QDockWidget):
         self.del_btn.setObjectName("secondaryButton")
         self.del_btn.clicked.connect(self.on_delete_layer)
 
+        self.select_all_btn = QPushButton("All")
+        self.select_all_btn.setToolTip("Select All Layers for Multi-Layer Editing (Draw / Erase across all layers)")
+        self.select_all_btn.setObjectName("secondaryButton")
+        self.select_all_btn.clicked.connect(self.on_toggle_select_all)
+
         self.up_btn = QPushButton("▲")
         self.up_btn.setToolTip("Move Layer Up")
         self.up_btn.setObjectName("secondaryButton")
@@ -147,6 +152,7 @@ class LayerPanel(QDockWidget):
         btn_layout.addWidget(self.copy_btn)
         btn_layout.addWidget(self.paste_btn)
         btn_layout.addWidget(self.del_btn)
+        btn_layout.addWidget(self.select_all_btn)
         btn_layout.addWidget(self.up_btn)
         btn_layout.addWidget(self.down_btn)
         layout.addLayout(btn_layout)
@@ -224,9 +230,29 @@ class LayerPanel(QDockWidget):
             self.opacity_val_label.setText(f"{val}%")
             self.opacity_slider.blockSignals(False)
 
-    # ------------------------------------------------------------------
-    # Internal slots (not history-emitting selection change)
-    # ------------------------------------------------------------------
+    def on_toggle_select_all(self) -> None:
+        """Toggles selecting all layers for multi-layer editing."""
+        if not self.doc or not self.doc.layers:
+            return
+        total = len(self.doc.layers)
+        currently_selected = len(self.list_widget.selectedItems())
+        if currently_selected == total:
+            # Deselect all except active layer
+            self.list_widget.blockSignals(True)
+            self.list_widget.clearSelection()
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                if item and item.data(Qt.UserRole) == self.doc.active_layer_index:
+                    item.setSelected(True)
+                    break
+            self.list_widget.blockSignals(False)
+            self._on_item_selection_changed()
+        else:
+            # Select all layers
+            self.list_widget.blockSignals(True)
+            self.list_widget.selectAll()
+            self.list_widget.blockSignals(False)
+            self._on_item_selection_changed()
 
     def _on_item_selection_changed(self) -> None:
         """Handles multi-layer row selection in the layer list."""

@@ -62,17 +62,23 @@ class LineTool(Tool):
         if not self.is_drawing:
             return False
         super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
         line_pts = bresenham_line(self.start_x, self.start_y, x, y)
+        coords = []
         for lx, ly in line_pts:
             for px, py in get_brush_coords(lx, ly, size):
                 if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
+                    coords.append((px, py))
+
+        if coords:
+            for layer in layers:
+                for px, py in coords:
                     layer.set_pixel(px, py, primary_color)
-                    changed = True
+                changed = True
         return changed
 
 
@@ -94,15 +100,17 @@ class RectangleTool(Tool):
         if not self.is_drawing:
             return False
         super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
         pts = get_rectangle_pixels(self.start_x, self.start_y, x, y, filled)
-        for px, py in pts:
-            if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
-                layer.set_pixel(px, py, primary_color)
+        coords = [pt for pt in pts if doc.is_valid_coord(pt[0], pt[1]) and is_pixel_editable(selection, pt[0], pt[1])]
+        if coords:
+            for layer in layers:
+                for px, py in coords:
+                    layer.set_pixel(px, py, primary_color)
                 changed = True
         return changed
 
@@ -125,14 +133,16 @@ class CircleTool(Tool):
         if not self.is_drawing:
             return False
         super().mouse_release(doc, x, y, primary_color, secondary_color, size, filled, selection, *args, **kwargs)
-        layer = doc.active_layer
-        if not layer or layer.locked or not layer.visible:
+        layers = doc.editable_layers
+        if not layers:
             return False
 
         changed = False
         pts = get_circle_pixels(self.start_x, self.start_y, x, y, filled)
-        for px, py in pts:
-            if doc.is_valid_coord(px, py) and is_pixel_editable(selection, px, py):
-                layer.set_pixel(px, py, primary_color)
+        coords = [pt for pt in pts if doc.is_valid_coord(pt[0], pt[1]) and is_pixel_editable(selection, pt[0], pt[1])]
+        if coords:
+            for layer in layers:
+                for px, py in coords:
+                    layer.set_pixel(px, py, primary_color)
                 changed = True
         return changed

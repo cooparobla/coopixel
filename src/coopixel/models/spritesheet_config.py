@@ -243,8 +243,14 @@ def build_document_from_spritesheet(
     global_frame_height: int = 32,
     override_layer_name: Optional[str] = None,
     override_tag: Optional[str] = None,
+    layer_name: Optional[str] = None,
+    tag: Optional[str] = None,
 ) -> PixelDocument:
     """Builds a new PixelDocument with animations, frames, layer tags, and pivot points."""
+    if layer_name and not override_layer_name:
+        override_layer_name = layer_name
+    if tag and not override_tag:
+        override_tag = tag
     fw = max(1, global_frame_width)
     fh = max(1, global_frame_height)
     img_w = img.width() if img and not img.isNull() else 8192
@@ -289,6 +295,11 @@ def build_document_from_spritesheet(
         doc.animations.append(Animation("new-animation", pivot_x=fw // 2, pivot_y=fh // 2))
 
     doc.active_animation_index = 0
+    for i, anim in enumerate(doc.animations):
+        if i != doc.active_animation_index:
+            anim.offload_to_disk(doc._temp_dir)
+        else:
+            anim.ensure_loaded(doc._temp_dir)
     return doc
 
 
@@ -300,8 +311,14 @@ def add_spritesheet_layers_to_document(
     global_frame_height: int = 32,
     override_layer_name: Optional[str] = None,
     override_tag: Optional[str] = None,
+    layer_name: Optional[str] = None,
+    tag: Optional[str] = None,
 ) -> PixelDocument:
     """Appends sliced spritesheet frames as new layers with layer tags to an existing PixelDocument."""
+    if layer_name and not override_layer_name:
+        override_layer_name = layer_name
+    if tag and not override_tag:
+        override_tag = tag
     fw = max(1, global_frame_width)
     fh = max(1, global_frame_height)
     img_w = img.width() if img and not img.isNull() else 8192
@@ -323,12 +340,14 @@ def add_spritesheet_layers_to_document(
 
         if default_single_anim and cfg_idx == 0:
             target_anim = doc.animations[0]
+            target_anim.ensure_loaded(doc._temp_dir)
             target_anim.name = cfg_name
             target_anim.fps = cfg.fps
         else:
             for anim in doc.animations:
                 if anim.name.strip().lower() == cfg_name.lower():
                     target_anim = anim
+                    target_anim.ensure_loaded(doc._temp_dir)
                     break
 
         px, py = cfg.get_pivot(fw, fh)
@@ -350,11 +369,16 @@ def add_spritesheet_layers_to_document(
                 target_anim.frames.append(new_f)
 
             target_frame = target_anim.frames[f_idx]
-            target_frame.layers = [l for l in target_frame.layers if l.name != "Background" or len(l.pixels) > 0]
-
             new_layer = Layer(name=target_layer_name, tag=target_tag)
             new_layer.pixels = sparse_pixels
             target_frame.layers.append(new_layer)
             target_frame.active_layer_index = len(target_frame.layers) - 1
 
+    for i, anim in enumerate(doc.animations):
+        if i != doc.active_animation_index:
+            anim.offload_to_disk(doc._temp_dir)
+        else:
+            anim.ensure_loaded(doc._temp_dir)
+
     return doc
+

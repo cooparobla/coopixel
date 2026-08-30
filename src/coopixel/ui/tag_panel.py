@@ -122,9 +122,9 @@ class TagPanel(QDockWidget):
             return
 
         for tag in tags:
-            layers = self.doc.get_layers_by_tag(tag)
+            layer_cnt = self.doc.get_tag_layer_count(tag)
             is_vis = self.doc.is_tag_visible(tag)
-            item_widget = TagItemWidget(tag, is_vis, len(layers))
+            item_widget = TagItemWidget(tag, is_vis, layer_cnt)
             item_widget.visibility_toggled.connect(self._on_tag_visibility_toggled)
             self.container_layout.addWidget(item_widget)
 

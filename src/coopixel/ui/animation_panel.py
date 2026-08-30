@@ -3,8 +3,8 @@ Animation Panel Widget for managing animation sequences, frames, and playback in
 """
 
 from typing import Optional
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QIcon, QImage, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -24,48 +25,75 @@ from coopixel.models.document import PixelDocument
 class FrameCardWidget(QFrame):
     """Widget representing a single frame thumbnail card in the animation timeline."""
 
+    rename_requested = Signal(int)
+
     def __init__(self, index: int, frame_name: str, thumbnail: QImage, is_active: bool, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.index = index
+        self.frame_name = frame_name
         self.setFrameShape(QFrame.StyledPanel)
-        self.setFixedWidth(72)
-        self.setFixedHeight(84)
-
-        bg_color = "#2E2620" if is_active else "#222222"
-        border_color = "#F97316" if is_active else "#333333"
-        self.setStyleSheet(
-            f"FrameCardWidget {{ background-color: {bg_color}; border: 2px solid {border_color}; border-radius: 6px; }}"
-            f"QLabel {{ color: #F1F5F9; border: none; font-size: 11px; font-weight: bold; }}"
-        )
+        self.setFixedWidth(86)
+        self.setFixedHeight(88)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
         layout.setAlignment(Qt.AlignCenter)
 
         # Thumbnail Image Label
         self.thumb_label = QLabel()
         self.thumb_label.setFixedSize(48, 48)
         self.thumb_label.setAlignment(Qt.AlignCenter)
-        pix = QPixmap.fromImage(thumbnail).scaled(48, 48, Qt.KeepAspectRatio, Qt.FastTransformation)
-        self.thumb_label.setPixmap(pix)
+        self.set_thumbnail(thumbnail)
         self.thumb_label.setStyleSheet("background-color: #181818; border: 1px solid #333333; border-radius: 4px;")
 
         # Title Label
-        self.title_label = QLabel(f"#{index + 1}")
+        display_name = frame_name.strip() if frame_name and frame_name.strip() else f"Frame {index + 1}"
+        short_title = display_name if len(display_name) <= 12 else display_name[:10] + "…"
+        self.title_label = QLabel(short_title)
         self.title_label.setAlignment(Qt.AlignCenter)
 
         layout.addWidget(self.thumb_label, alignment=Qt.AlignCenter)
         layout.addWidget(self.title_label, alignment=Qt.AlignCenter)
 
+        self.set_active(is_active)
+
+        tooltip_text = f"Frame #{index + 1}: {display_name}\n(Double-click or right-click to rename tile/frame)"
+        self.setToolTip(tooltip_text)
+        self.thumb_label.setToolTip(tooltip_text)
+        self.title_label.setToolTip(tooltip_text)
+
+    def set_active(self, is_active: bool) -> None:
+        """Updates frame card styling in-place without rebuilding widgets."""
+        bg_color = "#2E2620" if is_active else "#222222"
+        border_color = "#F97316" if is_active else "#333333"
+        self.setStyleSheet(
+            f"FrameCardWidget {{ background-color: {bg_color}; border: 2px solid {border_color}; border-radius: 6px; }}"
+            f"QLabel {{ color: #F1F5F9; border: none; font-size: 10px; font-weight: bold; }}"
+        )
+
+    def set_thumbnail(self, thumbnail: QImage) -> None:
+        """Updates thumbnail pixmap in-place."""
+        pix = QPixmap.fromImage(thumbnail).scaled(48, 48, Qt.KeepAspectRatio, Qt.FastTransformation)
+        self.thumb_label.setPixmap(pix)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self.rename_requested.emit(self.index)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
 
 class AnimationPanel(QDockWidget):
     # Emitted when animation list changes (add/rename/delete) -> triggers history push
     animation_structure_changed = Signal()
-    # Emitted when frame structure changes (add/dup/delete/move) -> triggers history push
+    # Emitted when frame structure changes (add/dup/delete/move/rename) -> triggers history push
     frame_structure_changed = Signal()
     # Emitted when active frame or active animation changes -> repaints canvas & updates layer panel
     active_frame_changed = Signal()
+    # Emitted during active playback ticks for ultra-fast canvas-only refresh (bypasses heavy side-panel widget rebuilds)
+    playback_frame_changed = Signal(int)
     # Emitted when animation visual attributes change (FPS/onion skin) -> repaints
     animation_visual_changed = Signal()
 
@@ -77,6 +105,10 @@ class AnimationPanel(QDockWidget):
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self._on_play_step)
         self.is_playing = False
+
+        # Thumbnail cache keyed by (anim_index, frame_index)
+        self._thumb_cache = {}
+        self._cards = []
 
         main_widget = QWidget()
         layout = QVBoxLayout(main_widget)
@@ -101,7 +133,7 @@ class AnimationPanel(QDockWidget):
         self.anim_combo.currentIndexChanged.connect(self.on_animation_selected)
 
         self.rename_anim_btn = QPushButton("✏️ Rename")
-        self.rename_anim_btn.setToolTip("Rename Active Animation")
+        self.rename_anim_btn.setToolTip("Rename Active Animation Sequence")
         self.rename_anim_btn.setObjectName("secondaryButton")
         self.rename_anim_btn.clicked.connect(self.on_rename_animation)
 
@@ -172,6 +204,11 @@ class AnimationPanel(QDockWidget):
         self.dup_btn.setObjectName("secondaryButton")
         self.dup_btn.clicked.connect(self.on_duplicate_frame)
 
+        self.rename_frame_btn = QPushButton("✏️ Rename Frame")
+        self.rename_frame_btn.setToolTip("Rename Active Frame / Tile Name")
+        self.rename_frame_btn.setObjectName("secondaryButton")
+        self.rename_frame_btn.clicked.connect(self.on_rename_frame)
+
         self.del_btn = QPushButton("🗑️ Delete")
         self.del_btn.setToolTip("Delete Active Frame")
         self.del_btn.setObjectName("secondaryButton")
@@ -180,15 +217,16 @@ class AnimationPanel(QDockWidget):
         self.move_left_btn = QPushButton("◀")
         self.move_left_btn.setToolTip("Move Frame Left")
         self.move_left_btn.setObjectName("secondaryButton")
-        self.move_left_btn.clicked.connect(self.on_move_frame_left)
+        self.move_left_btn.clicked.connect(self.on_move_left)
 
         self.move_right_btn = QPushButton("▶")
         self.move_right_btn.setToolTip("Move Frame Right")
         self.move_right_btn.setObjectName("secondaryButton")
-        self.move_right_btn.clicked.connect(self.on_move_frame_right)
+        self.move_right_btn.clicked.connect(self.on_move_right)
 
         ctrl_layout.addWidget(self.add_btn)
         ctrl_layout.addWidget(self.dup_btn)
+        ctrl_layout.addWidget(self.rename_frame_btn)
         ctrl_layout.addWidget(self.del_btn)
         ctrl_layout.addWidget(self.move_left_btn)
         ctrl_layout.addWidget(self.move_right_btn)
@@ -199,86 +237,90 @@ class AnimationPanel(QDockWidget):
         sep2.setStyleSheet("color: #2D3748;")
         ctrl_layout.addWidget(sep2)
 
-        # FPS Box
-        fps_label = QLabel("FPS:")
-        fps_label.setStyleSheet("color: #94A3B8; font-weight: bold;")
-        self.fps_box = QSpinBox()
-        self.fps_box.setRange(1, 60)
-        self.fps_box.setValue(self.doc.fps)
-        self.fps_box.setFixedWidth(54)
-        self.fps_box.setToolTip("Frames Per Second")
-        self.fps_box.valueChanged.connect(self.on_fps_changed)
+        # FPS SpinBox
+        fps_lbl = QLabel("FPS:")
+        fps_lbl.setStyleSheet("color: #94A3B8; font-weight: 500;")
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(1, 60)
+        self.fps_spin.setValue(10)
+        self.fps_spin.setSuffix(" fps")
+        self.fps_spin.valueChanged.connect(self.on_fps_changed)
 
-        ctrl_layout.addWidget(fps_label)
-        ctrl_layout.addWidget(self.fps_box)
+        ctrl_layout.addWidget(fps_lbl)
+        ctrl_layout.addWidget(self.fps_spin)
 
-        ctrl_layout.addStretch(1)
-
-        # Counter Label
+        # Frame counter label
         self.counter_label = QLabel("Frame 1 / 1")
-        self.counter_label.setStyleSheet("color: #94A3B8; font-weight: bold; font-size: 12px;")
+        self.counter_label.setStyleSheet("color: #94A3B8; font-weight: 500; padding-left: 8px;")
         ctrl_layout.addWidget(self.counter_label)
 
+        ctrl_layout.addStretch(1)
         layout.addLayout(ctrl_layout)
 
-        # 2. Timeline Scroll Area for Frame Cards
-        self.timeline_scroll = QScrollArea()
-        self.timeline_scroll.setWidgetResizable(True)
-        self.timeline_scroll.setFixedHeight(104)
-        self.timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.timeline_scroll.setStyleSheet(
-            "QScrollArea { background-color: #121417; border: 1px solid #2D3748; border-radius: 6px; }"
-        )
+        # 2. Scrollable Frame Cards Strip
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setMinimumHeight(104)
+        self.scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         self.strip_widget = QWidget()
         self.strip_layout = QHBoxLayout(self.strip_widget)
-        self.strip_layout.setContentsMargins(6, 6, 6, 6)
-        self.strip_layout.setSpacing(8)
+        self.strip_layout.setContentsMargins(0, 0, 0, 0)
+        self.strip_layout.setSpacing(6)
         self.strip_layout.setAlignment(Qt.AlignLeft)
-        self.timeline_scroll.setWidget(self.strip_widget)
 
-        layout.addWidget(self.timeline_scroll)
+        self.scroll_area.setWidget(self.strip_widget)
+        layout.addWidget(self.scroll_area)
+
         self.setWidget(main_widget)
-
         self.refresh_animation_combo()
         self.refresh_timeline()
 
+    def invalidate_thumbnail(self, frame_index: Optional[int] = None) -> None:
+        """Invalidates thumbnail cache for a specific frame or all frames."""
+        if self.doc:
+            self.doc.invalidate_render_cache(frame_index)
+        if frame_index is None:
+            self._thumb_cache.clear()
+        else:
+            anim_idx = self.doc.active_animation_index if self.doc else 0
+            self._thumb_cache.pop((anim_idx, frame_index), None)
+            if 0 <= frame_index < len(self._cards):
+                thumb = self.doc.render_frame_qimage(frame_index)
+                self._thumb_cache[(anim_idx, frame_index)] = thumb
+                self._cards[frame_index].set_thumbnail(thumb)
+
     def set_document(self, doc: PixelDocument) -> None:
-        self.stop_playback()
         self.doc = doc
-        self.fps_box.setValue(self.doc.fps)
+        self.invalidate_thumbnail()
         self.refresh_animation_combo()
         self.refresh_timeline()
 
     def refresh_animation_combo(self) -> None:
         self.anim_combo.blockSignals(True)
         self.anim_combo.clear()
-        for anim in self.doc.animations:
-            self.anim_combo.addItem(anim.name)
+        for i, anim in enumerate(self.doc.animations):
+            fc = anim.frame_count
+            self.anim_combo.addItem(f"🎬 {anim.name} ({fc}f)", i)
         self.anim_combo.setCurrentIndex(self.doc.active_animation_index)
         self.anim_combo.blockSignals(False)
         self.del_anim_btn.setEnabled(len(self.doc.animations) > 1)
 
     def on_animation_selected(self, index: int) -> None:
-        if index >= 0 and self.doc.select_animation(index):
-            self.stop_playback()
-            self.fps_box.setValue(self.doc.fps)
+        if self.doc.select_animation(index):
             self.refresh_timeline()
             self.active_frame_changed.emit()
 
     def on_add_animation(self) -> None:
-        name, ok = QInputDialog.getText(self, "New Animation", "Animation Name:", text="new-animation")
-        if ok and name.strip():
-            self.doc.add_animation(name.strip())
-            self.refresh_animation_combo()
-            self.refresh_timeline()
-            self.animation_structure_changed.emit()
-            self.active_frame_changed.emit()
+        self.doc.add_animation()
+        self.refresh_animation_combo()
+        self.refresh_timeline()
+        self.animation_structure_changed.emit()
+        self.active_frame_changed.emit()
 
     def on_rename_animation(self) -> None:
         current_name = self.doc.active_animation.name
-        name, ok = QInputDialog.getText(self, "Rename Animation", "New Animation Name:", text=current_name)
+        name, ok = QInputDialog.getText(self, "Rename Animation Sequence", "New Animation Name:", text=current_name)
         if ok and name.strip() and name.strip() != current_name:
             self.doc.rename_animation(self.doc.active_animation_index, name.strip())
             self.refresh_animation_combo()
@@ -302,27 +344,87 @@ class AnimationPanel(QDockWidget):
                 self.animation_structure_changed.emit()
                 self.active_frame_changed.emit()
 
-    def refresh_timeline(self) -> None:
-        """Rebuilds frame strip thumbnail cards to reflect current document frames state."""
+    def on_rename_frame(self, index: Optional[int] = None) -> None:
+        if index is None:
+            index = self.doc.active_frame_index
+        if not (0 <= index < len(self.doc.frames)):
+            return
+
+        current_name = self.doc.frames[index].name
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename Frame / Tile",
+            f"Frame #{index + 1} Name (e.g. 'stone_wall', 'grass_top'):",
+            text=current_name,
+        )
+        if ok and new_name.strip() and new_name.strip() != current_name:
+            self.doc.rename_frame(index, new_name.strip())
+            self.refresh_timeline()
+            self.frame_structure_changed.emit()
+
+    def _on_card_context_menu(self, card_idx: int, pos: QPoint, source_widget: QWidget) -> None:
+        menu = QMenu(self)
+        rename_act = menu.addAction("✏️ Rename Frame / Tile...")
+        dup_act = menu.addAction("📋 Duplicate Frame")
+        left_act = menu.addAction("◀ Move Left")
+        right_act = menu.addAction("▶ Move Right")
+        del_act = menu.addAction("🗑️ Delete Frame")
+
+        action = menu.exec_(source_widget.mapToGlobal(pos)) if hasattr(menu, "exec_") else menu.exec(source_widget.mapToGlobal(pos))
+        if action == rename_act:
+            self.on_rename_frame(card_idx)
+        elif action == dup_act:
+            self.doc.select_frame(card_idx)
+            self.on_duplicate_frame()
+        elif action == left_act:
+            self.doc.select_frame(card_idx)
+            self.on_move_left()
+        elif action == right_act:
+            self.doc.select_frame(card_idx)
+            self.on_move_right()
+        elif action == del_act:
+            self.doc.select_frame(card_idx)
+            self.on_delete_frame()
+
+    def refresh_timeline(self, rebuild: bool = True) -> None:
+        """Updates frame strip cards. If rebuild=False and card count matches, updates in-place for O(1) speed."""
+        frames_cnt = len(self.doc.frames)
+        self.counter_label.setText(f"Frame {self.doc.active_frame_index + 1} / {frames_cnt}")
+
+        if not rebuild and len(self._cards) == frames_cnt:
+            for idx, card in enumerate(self._cards):
+                card.set_active(idx == self.doc.active_frame_index)
+            return
+
         # Clear existing widgets
         while self.strip_layout.count():
             item = self.strip_layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.deleteLater()
+        self._cards.clear()
 
         # Update Mirror button visibility/enabled state based on .R or .L suffix
         anim_name = self.doc.active_animation.name.strip() if self.doc and self.doc.active_animation else ""
         has_lr = anim_name.upper().endswith(".R") or anim_name.upper().endswith(".L")
         self.mirror_anim_btn.setEnabled(has_lr)
 
-        frames_cnt = len(self.doc.frames)
-        # Enable or disable delete button: CANNOT delete if only 1 frame exists
         self.del_btn.setEnabled(frames_cnt > 1)
-        self.counter_label.setText(f"Frame {self.doc.active_frame_index + 1} / {frames_cnt}")
 
+        if self.doc and self.doc.active_animation:
+            self.fps_spin.blockSignals(True)
+            self.fps_spin.setValue(self.doc.fps)
+            self.fps_spin.blockSignals(False)
+
+        anim_idx = self.doc.active_animation_index
         for i in range(frames_cnt):
-            thumb = self.doc.render_frame_qimage(i)
+            cache_key = (anim_idx, i)
+            if cache_key in self._thumb_cache:
+                thumb = self._thumb_cache[cache_key]
+            else:
+                thumb = self.doc.render_frame_qimage(i)
+                self._thumb_cache[cache_key] = thumb
+
             card = FrameCardWidget(
                 index=i,
                 frame_name=self.doc.frames[i].name,
@@ -330,13 +432,27 @@ class AnimationPanel(QDockWidget):
                 is_active=(i == self.doc.active_frame_index),
                 parent=self.strip_widget,
             )
+            card.rename_requested.connect(self.on_rename_frame)
+            card.setContextMenuPolicy(Qt.CustomContextMenu)
+            card.customContextMenuRequested.connect(lambda pos, idx=i, c=card: self._on_card_context_menu(idx, pos, c))
             card.mousePressEvent = lambda evt, idx=i: self.on_select_frame(idx)
+            self._cards.append(card)
             self.strip_layout.addWidget(card)
 
     def on_select_frame(self, index: int) -> None:
         if self.doc.select_frame(index):
-            self.refresh_timeline()
+            self.refresh_timeline(rebuild=False)
             self.active_frame_changed.emit()
+
+    def on_prev_frame(self) -> None:
+        if self.doc and len(self.doc.frames) > 0:
+            prev_idx = (self.doc.active_frame_index - 1) % len(self.doc.frames)
+            self.on_select_frame(prev_idx)
+
+    def on_next_frame(self) -> None:
+        if self.doc and len(self.doc.frames) > 0:
+            next_idx = (self.doc.active_frame_index + 1) % len(self.doc.frames)
+            self.on_select_frame(next_idx)
 
     def toggle_play(self) -> None:
         if self.is_playing:
@@ -351,35 +467,33 @@ class AnimationPanel(QDockWidget):
         self.play_timer.start(interval)
 
     def pause_playback(self) -> None:
+        was_playing = self.is_playing
         self.is_playing = False
         self.play_btn.setText("▶ Play")
         self.play_timer.stop()
+        if was_playing:
+            self.active_frame_changed.emit()
 
     def stop_playback(self) -> None:
         self.pause_playback()
         self.doc.select_frame(0)
-        self.refresh_timeline()
+        self.refresh_timeline(rebuild=False)
         self.active_frame_changed.emit()
 
     def _on_play_step(self) -> None:
-        if not self.doc.frames:
+        if not self.doc or len(self.doc.frames) <= 1:
             return
         next_idx = (self.doc.active_frame_index + 1) % len(self.doc.frames)
         self.doc.select_frame(next_idx)
-        self.refresh_timeline()
-        self.active_frame_changed.emit()
+        self.refresh_timeline(rebuild=False)
+        self.playback_frame_changed.emit(next_idx)
 
-    def on_prev_frame(self) -> None:
-        if not self.doc.frames:
-            return
-        prev_idx = (self.doc.active_frame_index - 1) % len(self.doc.frames)
-        self.on_select_frame(prev_idx)
-
-    def on_next_frame(self) -> None:
-        if not self.doc.frames:
-            return
-        next_idx = (self.doc.active_frame_index + 1) % len(self.doc.frames)
-        self.on_select_frame(next_idx)
+    def on_fps_changed(self, fps: int) -> None:
+        self.doc.fps = fps
+        if self.is_playing:
+            interval = max(10, 1000 // max(1, self.doc.fps))
+            self.play_timer.setInterval(interval)
+        self.animation_visual_changed.emit()
 
     def on_add_frame(self) -> None:
         self.doc.add_frame()
@@ -394,27 +508,20 @@ class AnimationPanel(QDockWidget):
         self.active_frame_changed.emit()
 
     def on_delete_frame(self) -> None:
-        if len(self.doc.frames) <= 1:
-            return  # Must have at least 1 frame
         if self.doc.delete_frame(self.doc.active_frame_index):
             self.refresh_timeline()
             self.frame_structure_changed.emit()
             self.active_frame_changed.emit()
 
-    def on_move_frame_left(self) -> None:
+    def on_move_left(self) -> None:
         if self.doc.move_frame_left(self.doc.active_frame_index):
             self.refresh_timeline()
             self.frame_structure_changed.emit()
             self.active_frame_changed.emit()
 
-    def on_move_frame_right(self) -> None:
+    def on_move_right(self) -> None:
         if self.doc.move_frame_right(self.doc.active_frame_index):
             self.refresh_timeline()
             self.frame_structure_changed.emit()
             self.active_frame_changed.emit()
 
-    def on_fps_changed(self, value: int) -> None:
-        self.doc.fps = max(1, min(60, value))
-        if self.is_playing:
-            self.play_timer.setInterval(1000 // self.doc.fps)
-        self.animation_visual_changed.emit()

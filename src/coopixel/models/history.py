@@ -28,7 +28,7 @@ class HistoryStack:
 
     def push(self, doc_dict: Dict[str, Any]) -> None:
         """Pushes a new document state. Clears redo history."""
-        self.undo_stack.append(copy.deepcopy(doc_dict))
+        self.undo_stack.append(doc_dict)
         if len(self.undo_stack) > self.max_depth:
             self.undo_stack.pop(0)
         self.redo_stack.clear()
@@ -49,8 +49,8 @@ class HistoryStack:
         # Move the current (most recent) state to redo stack
         current = self.undo_stack.pop()
         self.redo_stack.append(current)
-        # Return a copy of the now-most-recent state (the previous one)
-        return copy.deepcopy(self.undo_stack[-1])
+        # Return the now-most-recent state (the previous one)
+        return self.undo_stack[-1]
 
     def redo(self) -> Optional[Dict[str, Any]]:
         """Restores the most recently undone state.
@@ -59,9 +59,9 @@ class HistoryStack:
         if not self.can_redo():
             return None
         # Move the redo state back onto the undo stack
-        redo_state = self.redo_stack.pop()
-        self.undo_stack.append(copy.deepcopy(redo_state))
-        return copy.deepcopy(redo_state)
+        state = self.redo_stack.pop()
+        self.undo_stack.append(state)
+        return state
 
     def clear(self) -> None:
         self.undo_stack.clear()

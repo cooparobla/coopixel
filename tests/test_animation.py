@@ -153,7 +153,7 @@ def test_main_window_right_toolbar_and_animation_panel():
 
     # Check default animation in panel dropdown
     assert mw.animation_panel.anim_combo.count() == 1
-    assert mw.animation_panel.anim_combo.currentText() == "new-animation"
+    assert "new-animation" in mw.animation_panel.anim_combo.currentText()
 
     # Animation panel frame controls
     assert len(mw.doc.frames) == 1

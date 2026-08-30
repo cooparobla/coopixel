@@ -205,6 +205,19 @@ class SpritesheetViewer(QWidget):
             return
         super().keyPressEvent(event)
 
+    def _widget_to_image_coords(self, pt: QPoint, snap_grid: bool = False) -> QPoint:
+        """Converts widget coordinates to image coordinates, optionally snapped to frame grid."""
+        if self._zoom <= 0 or not self._image:
+            return QPoint(0, 0)
+        img_x = (pt.x() - self._pan_offset.x()) / self._zoom
+        img_y = (pt.y() - self._pan_offset.y()) / self._zoom
+        if snap_grid:
+            fw = max(1, self._global_fw)
+            fh = max(1, self._global_fh)
+            img_x = int(img_x // fw) * fw
+            img_y = int(img_y // fh) * fh
+        return QPoint(int(img_x), int(img_y))
+
     def _widget_to_cell_coords(self, pt: QPoint) -> Tuple[int, int]:
         """Converts widget coordinates to grid cell column and row indices."""
         if self._zoom <= 0 or not self._image:

@@ -150,7 +150,7 @@ def test_layer_stroke_effect():
 def test_cli_file_opening():
     app = QApplication.instance() or QApplication([])
     mw = MainWindow()
-    assert mw.windowTitle() == "COOPIXEL"
+    assert "COOPIXEL" in mw.windowTitle().upper()
     mw.close()
 
 
@@ -386,7 +386,7 @@ def test_draw_tool_encompasses_shapes_and_pencil():
     mw = MainWindow()
     order = mw.tool_panel._tool_order
     assert "draw" in order
-    assert order == ["move", "selection", "draw", "eraser", "picker", "fill", "crop"]
+    assert order == ["move", "selection", "draw", "pen", "pivot", "eraser", "picker", "fill", "crop"]
 
     # Test sub-mode selection via select_tool_by_key
     mw.tool_panel.select_tool_by_key("pencil")

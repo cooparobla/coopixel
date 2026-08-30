@@ -5,15 +5,18 @@ Supports extensible layer effects (e.g. Stroke).
 """
 
 import os
-from typing import Dict, List, Optional, Tuple
+import pickle
+import tempfile
+import uuid
+from typing import Dict, List, Optional, Set, Tuple
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from pycaml import CAMLMap
 from coopixel.models.effects import LayerEffect, effect_from_dict
 from coopixel.models.path import AnchorPoint, VectorPath
 
 
-
 _COLOR_CACHE: Dict[str, QColor] = {}
+_BGRA_CACHE: Dict[str, Tuple[int, int, int, int]] = {}
 
 
 def hex_to_qcolor(hex_str: str) -> QColor:
@@ -37,6 +40,16 @@ def hex_to_qcolor(hex_str: str) -> QColor:
     return col
 
 
+def hex_to_bgra(hex_str: str) -> Tuple[int, int, int, int]:
+    """Returns (blue, green, red, alpha) tuple of 0-255 ints for LE ARGB32 buffer packing."""
+    bgra = _BGRA_CACHE.get(hex_str)
+    if bgra is None:
+        col = hex_to_qcolor(hex_str)
+        bgra = (col.blue(), col.green(), col.red(), col.alpha())
+        _BGRA_CACHE[hex_str] = bgra
+    return bgra
+
+
 def qcolor_to_hex(qcol: QColor) -> str:
     return f"#{qcol.red():02X}{qcol.green():02X}{qcol.blue():02X}{qcol.alpha():02X}"
 
@@ -57,10 +70,14 @@ class Layer:
         self.locked = locked
         self.opacity = max(0.0, min(1.0, float(opacity)))
         self.tag = tag.strip()
-        # Sparse dictionary mapping "x,y" string coordinates to hex color "#RRGGBBAA"
         self.pixels: Dict[str, str] = {}
         # Extensible list of layer effects
         self.effects: List[LayerEffect] = []
+        self._render_image: Optional[QImage] = None
+
+    def has_pixel(self, x: int, y: int) -> bool:
+        """Returns True if this layer contains a non-empty pixel at (x, y)."""
+        return f"{x},{y}" in self.pixels
 
     def get_pixel(self, x: int, y: int) -> Optional[str]:
         """Returns "#RRGGBBAA" color string if present, else None."""
@@ -74,6 +91,7 @@ class Layer:
 
     def set_pixel(self, x: int, y: int, hex_color: str) -> None:
         """Sets pixel color. If hex_color is None or fully transparent (#00000000), clears the pixel."""
+        self._render_image = None
         if not hex_color or hex_color.upper() in ("#00000000", "TRANSPARENT"):
             self.clear_pixel(x, y)
             return
@@ -87,15 +105,18 @@ class Layer:
         self.pixels[f"{x},{y}"] = qcolor_to_hex(qcol)
 
     def clear_pixel(self, x: int, y: int) -> None:
+        self._render_image = None
         key = f"{x},{y}"
         if key in self.pixels:
             del self.pixels[key]
 
     def clear_all(self) -> None:
+        self._render_image = None
         self.pixels.clear()
 
     def crop_to_bounds(self, width: int, height: int) -> int:
         """Removes any pixels in this layer lying outside (0 <= x < width) and (0 <= y < height). Returns count removed."""
+        self._render_image = None
         to_delete = []
         for key in list(self.pixels.keys()):
             parts = key.split(",")
@@ -109,6 +130,7 @@ class Layer:
 
     def flip_horizontal(self, width: int) -> None:
         """Flips layer pixels horizontally across specified canvas width."""
+        self._render_image = None
         new_pixels: Dict[str, str] = {}
         for key, hex_val in self.pixels.items():
             parts = key.split(",")
@@ -120,6 +142,7 @@ class Layer:
 
     def flip_vertical(self, height: int) -> None:
         """Flips layer pixels vertically across specified canvas height."""
+        self._render_image = None
         new_pixels: Dict[str, str] = {}
         for key, hex_val in self.pixels.items():
             parts = key.split(",")
@@ -173,7 +196,7 @@ class Layer:
             "locked": self.locked,
             "opacity": round(self.opacity, 3),
             "tag": self.tag,
-            "pixels": self.pixels,
+            "pixels": dict(self.pixels),
             "effects": [eff.to_dict() for eff in self.effects],
         }
 
@@ -339,7 +362,9 @@ class AnimationFrame:
 
 
 class Animation:
-    """Represents a named distinct animation sequence containing frames and a shared pivot point."""
+    """Represents a named distinct animation sequence containing frames and a shared pivot point.
+    Supports offloading inactive frames to disk in a temporary directory for high runtime efficiency.
+    """
 
     def __init__(self, name: str = "new-animation", fps: int = 10, pivot_x: int = 16, pivot_y: int = 16):
         self.name = name
@@ -348,8 +373,96 @@ class Animation:
         self.pivot_y: int = int(pivot_y)
         self.frames: List[AnimationFrame] = []
         self.active_frame_index: int = 0
+        self._is_loaded: bool = True
+        self._cache_file: Optional[str] = None
+        self._cached_frame_count: int = 1
+        self._cached_frame_names: List[str] = ["Frame 1"]
+        self._cached_tags: Set[str] = set()
+        self._cached_tag_counts: Dict[str, int] = {}
+        self._tag_visibility_overrides: Dict[str, bool] = {}
         # Initialize with default frame
         self.frames.append(AnimationFrame("Frame 1"))
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._is_loaded
+
+    @property
+    def frame_count(self) -> int:
+        if self._is_loaded:
+            return len(self.frames)
+        return self._cached_frame_count
+
+    @property
+    def frame_names(self) -> List[str]:
+        if self._is_loaded:
+            return [f.name for f in self.frames]
+        return list(self._cached_frame_names)
+
+    def offload_to_disk(self, temp_dir: str) -> None:
+        """Serializes frames to a temporary binary cache file on disk and frees memory."""
+        if not self._is_loaded:
+            return
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir, exist_ok=True)
+        self._cached_frame_count = len(self.frames)
+        self._cached_frame_names = [f.name for f in self.frames]
+
+        tag_counts: Dict[str, int] = {}
+        for f in self.frames:
+            for l in f.layers:
+                if l.tag and l.tag.strip():
+                    t = l.tag.strip()
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        self._cached_tag_counts = tag_counts
+        self._cached_tags = set(tag_counts.keys())
+
+        cache_path = os.path.join(temp_dir, f"anim_{id(self)}_{uuid.uuid4().hex[:8]}.dat")
+        raw_frames = [f.to_dict() for f in self.frames]
+        self._cached_raw_frames = raw_frames
+        with open(cache_path, "wb") as f:
+            pickle.dump(raw_frames, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        if self._cache_file and self._cache_file != cache_path and os.path.exists(self._cache_file):
+            try:
+                os.remove(self._cache_file)
+            except OSError:
+                pass
+
+        self._cache_file = cache_path
+        self.frames = []
+        self._is_loaded = False
+
+    def ensure_loaded(self, temp_dir: Optional[str] = None) -> None:
+        """Restores frames from disk cache if offloaded."""
+        if self._is_loaded:
+            return
+        self._cached_raw_frames = None
+        if self._cache_file and os.path.exists(self._cache_file):
+            try:
+                with open(self._cache_file, "rb") as f:
+                    raw_frames = pickle.load(f)
+                self.frames = [AnimationFrame.from_dict(f) for f in raw_frames]
+                # Apply any explicit tag visibility overrides set while offloaded
+                if hasattr(self, "_tag_visibility_overrides") and self._tag_visibility_overrides:
+                    for f in self.frames:
+                        for l in f.layers:
+                            if l.tag and l.tag.strip().lower() in self._tag_visibility_overrides:
+                                l.visible = self._tag_visibility_overrides[l.tag.strip().lower()]
+                    self._tag_visibility_overrides.clear()
+                self._is_loaded = True
+                try:
+                    os.remove(self._cache_file)
+                except OSError:
+                    pass
+                self._cache_file = None
+            except Exception:
+                self.frames = [AnimationFrame("Frame 1")]
+                self._is_loaded = True
+        else:
+            self.frames = [AnimationFrame("Frame 1")]
+            self._is_loaded = True
 
     @property
     def pivot(self) -> Tuple[int, int]:
@@ -361,92 +474,142 @@ class Animation:
 
     @property
     def active_frame(self) -> AnimationFrame:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if 0 <= self.active_frame_index < len(self.frames):
             return self.frames[self.active_frame_index]
-        return self.frames[0]
+        if self.frames:
+            return self.frames[0]
+        f = AnimationFrame("Frame 1")
+        self.frames.append(f)
+        return f
 
     def add_frame(self, name: Optional[str] = None) -> AnimationFrame:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if name is None:
             name = f"Frame {len(self.frames) + 1}"
         frame = AnimationFrame(name=name)
         insert_idx = self.active_frame_index + 1
         self.frames.insert(insert_idx, frame)
         self.active_frame_index = insert_idx
+        self._cached_frame_count = len(self.frames)
+        self._cached_frame_names = [f.name for f in self.frames]
         return frame
 
     def duplicate_frame(self, index: int) -> Optional[AnimationFrame]:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if 0 <= index < len(self.frames):
             cloned = self.frames[index].clone()
             self.frames.insert(index + 1, cloned)
             self.active_frame_index = index + 1
+            self._cached_frame_count = len(self.frames)
+            self._cached_frame_names = [f.name for f in self.frames]
             return cloned
         return None
 
     def delete_frame(self, index: int) -> bool:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if len(self.frames) <= 1:
             return False  # Minimum 1 frame rule
         if 0 <= index < len(self.frames):
             del self.frames[index]
             if self.active_frame_index >= len(self.frames):
                 self.active_frame_index = len(self.frames) - 1
+            self._cached_frame_count = len(self.frames)
+            self._cached_frame_names = [f.name for f in self.frames]
             return True
         return False
 
     def select_frame(self, index: int) -> bool:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if 0 <= index < len(self.frames):
             self.active_frame_index = index
             return True
         return False
 
     def move_frame_left(self, index: int) -> bool:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if 0 < index < len(self.frames):
             self.frames[index], self.frames[index - 1] = self.frames[index - 1], self.frames[index]
             if self.active_frame_index == index:
                 self.active_frame_index = index - 1
             elif self.active_frame_index == index - 1:
                 self.active_frame_index = index
+            self._cached_frame_names = [f.name for f in self.frames]
             return True
         return False
 
     def move_frame_right(self, index: int) -> bool:
+        if not self._is_loaded:
+            self.ensure_loaded()
         if 0 <= index < len(self.frames) - 1:
             self.frames[index], self.frames[index + 1] = self.frames[index + 1], self.frames[index]
             if self.active_frame_index == index:
                 self.active_frame_index = index + 1
             elif self.active_frame_index == index + 1:
                 self.active_frame_index = index
+            self._cached_frame_names = [f.name for f in self.frames]
             return True
         return False
 
     def clone(self, name: Optional[str] = None) -> "Animation":
         anim_name = name if name is not None else f"{self.name} Copy"
         anim = Animation(name=anim_name, fps=self.fps, pivot_x=self.pivot_x, pivot_y=self.pivot_y)
-        anim.frames = [f.clone() for f in self.frames]
+        if self._is_loaded:
+            anim.frames = [f.clone() for f in self.frames]
+        elif self._cache_file and os.path.exists(self._cache_file):
+            with open(self._cache_file, "rb") as f:
+                raw = pickle.load(f)
+            anim.frames = [AnimationFrame.from_dict(f) for f in raw]
+        else:
+            anim.frames = [AnimationFrame("Frame 1")]
         anim.active_frame_index = min(self.active_frame_index, max(0, len(anim.frames) - 1))
+        anim._cached_frame_count = len(anim.frames)
+        anim._cached_frame_names = [f.name for f in anim.frames]
         return anim
 
     def flip_horizontal(self, width: int) -> None:
-        """Flips all frames in animation horizontally and mirrors pivot_x."""
+        if not self._is_loaded:
+            self.ensure_loaded()
         for frame in self.frames:
             frame.flip_horizontal(width)
         if self.pivot_x is not None:
             self.pivot_x = width - 1 - self.pivot_x
 
     def flip_vertical(self, height: int) -> None:
-        """Flips all frames in animation vertically and mirrors pivot_y."""
+        if not self._is_loaded:
+            self.ensure_loaded()
         for frame in self.frames:
             frame.flip_vertical(height)
         if self.pivot_y is not None:
             self.pivot_y = height - 1 - self.pivot_y
 
     def to_dict(self) -> dict:
+        if self._is_loaded:
+            raw_frames = [f.to_dict() for f in self.frames]
+        elif hasattr(self, "_cached_raw_frames") and self._cached_raw_frames is not None:
+            raw_frames = self._cached_raw_frames
+        elif self._cache_file and os.path.exists(self._cache_file):
+            try:
+                with open(self._cache_file, "rb") as f:
+                    raw_frames = pickle.load(f)
+                self._cached_raw_frames = raw_frames
+            except Exception:
+                raw_frames = []
+        else:
+            raw_frames = []
         return {
             "name": self.name,
             "fps": self.fps,
             "pivot_x": self.pivot_x,
             "pivot_y": self.pivot_y,
             "active_frame": self.active_frame_index,
-            "frames": [f.to_dict() for f in self.frames],
+            "frames": raw_frames,
         }
 
     @classmethod
@@ -471,24 +634,66 @@ class Animation:
         else:
             anim.frames.append(AnimationFrame("Frame 1"))
         anim.active_frame_index = max(0, min(int(data.get("active_frame", 0)), len(anim.frames) - 1))
+        anim._cached_frame_count = len(anim.frames)
+        anim._cached_frame_names = [f.name for f in anim.frames]
+        tags = set()
+        for f in anim.frames:
+            for l in f.layers:
+                if l.tag and l.tag.strip():
+                    tags.add(l.tag.strip())
+        anim._cached_tags = tags
         return anim
 
 
 class PixelDocument:
-    """Represents a multi-layer, multi-frame, multi-animation pixel art document."""
+    """Represents a multi-layer, multi-frame, multi-animation pixel art document.
+    Manages session disk offloading for inactive animations to optimize runtime memory.
+    """
 
     def __init__(self, width: int = 32, height: int = 32, filepath: Optional[str] = None):
         self.width = max(1, width)
         self.height = max(1, height)
         self.filepath = filepath
+        self._temp_dir_obj: Optional[tempfile.TemporaryDirectory] = tempfile.TemporaryDirectory(prefix="coopixel_doc_")
+        self._temp_dir: str = self._temp_dir_obj.name
         self.animations: List[Animation] = []
         self.active_animation_index: int = 0
         self.paths: List[VectorPath] = []
         self.active_path_index: Optional[int] = None
         self.primary_color: str = "#F97316FF"
+        self._frame_composite_cache: Dict[int, QImage] = {}
 
         # Every new file MUST have at least one animation named "new-animation"
         self.animations.append(Animation("new-animation", pivot_x=self.width // 2, pivot_y=self.height // 2))
+
+    def invalidate_render_cache(self, frame_index: Optional[int] = None) -> None:
+        """Invalidate the cached composite QImages for one frame or all frames."""
+        if not hasattr(self, "_frame_composite_cache"):
+            self._frame_composite_cache = {}
+        if frame_index is None:
+            self._frame_composite_cache.clear()
+        else:
+            self._frame_composite_cache.pop((self.active_animation_index, frame_index), None)
+
+    def cleanup(self) -> None:
+        """Removes all temporary disk files created for offloaded animations."""
+        if hasattr(self, "animations"):
+            for anim in self.animations:
+                if getattr(anim, "_cache_file", None) and os.path.exists(anim._cache_file):
+                    try:
+                        os.remove(anim._cache_file)
+                    except OSError:
+                        pass
+                    anim._cache_file = None
+        if hasattr(self, "_temp_dir_obj") and self._temp_dir_obj is not None:
+            try:
+                self._temp_dir_obj.cleanup()
+            except Exception:
+                pass
+            self._temp_dir_obj = None
+
+    def __del__(self) -> None:
+        self.cleanup()
 
     @property
     def active_path(self) -> Optional[VectorPath]:
@@ -591,11 +796,13 @@ class PixelDocument:
                     count += 1
         return count
 
-
     @property
     def active_animation(self) -> Animation:
         if 0 <= self.active_animation_index < len(self.animations):
-            return self.animations[self.active_animation_index]
+            anim = self.animations[self.active_animation_index]
+            if not anim._is_loaded:
+                anim.ensure_loaded(self._temp_dir)
+            return anim
         return self.animations[0]
 
     # Delegates animation properties to active animation
@@ -651,6 +858,11 @@ class PixelDocument:
     def add_animation(self, name: Optional[str] = None) -> Animation:
         if name is None:
             name = f"new-animation-{len(self.animations) + 1}"
+        # Offload currently active animation to conserve RAM
+        if 0 <= self.active_animation_index < len(self.animations):
+            curr = self.animations[self.active_animation_index]
+            if curr._is_loaded:
+                curr.offload_to_disk(self._temp_dir)
         anim = Animation(name=name, pivot_x=self.width // 2, pivot_y=self.height // 2)
         self.animations.append(anim)
         self.active_animation_index = len(self.animations) - 1
@@ -666,15 +878,34 @@ class PixelDocument:
         if len(self.animations) <= 1:
             return False  # Minimum 1 animation rule
         if 0 <= index < len(self.animations):
-            del self.animations[index]
+            anim = self.animations.pop(index)
+            if anim._cache_file and os.path.exists(anim._cache_file):
+                try:
+                    os.remove(anim._cache_file)
+                except OSError:
+                    pass
             if self.active_animation_index >= len(self.animations):
                 self.active_animation_index = len(self.animations) - 1
+            # Ensure newly active animation is loaded
+            self.active_animation.ensure_loaded(self._temp_dir)
             return True
         return False
 
     def select_animation(self, index: int) -> bool:
+        """Selects animation sequence at index, swapping inactive animation frames to disk cache."""
         if 0 <= index < len(self.animations):
+            if index == self.active_animation_index and self.animations[index]._is_loaded:
+                return True
+            # Offload previously active animation
+            if 0 <= self.active_animation_index < len(self.animations):
+                prev = self.animations[self.active_animation_index]
+                if prev._is_loaded:
+                    prev.offload_to_disk(self._temp_dir)
+            # Ensure newly selected animation is hydrated
+            target = self.animations[index]
+            target.ensure_loaded(self._temp_dir)
             self.active_animation_index = index
+            self.invalidate_render_cache()
             return True
         return False
 
@@ -684,6 +915,12 @@ class PixelDocument:
 
     def duplicate_frame(self, index: int) -> Optional[AnimationFrame]:
         return self.active_animation.duplicate_frame(index)
+
+    def rename_frame(self, index: int, new_name: str) -> bool:
+        if self.active_animation and 0 <= index < len(self.active_animation.frames) and new_name.strip():
+            self.active_animation.frames[index].name = new_name.strip()
+            return True
+        return False
 
     def delete_frame(self, index: int) -> bool:
         return self.active_animation.delete_frame(index)
@@ -716,6 +953,11 @@ class PixelDocument:
     @property
     def selected_layers(self) -> List[Layer]:
         return self.active_frame.selected_layers if self.active_frame else []
+
+    @property
+    def editable_layers(self) -> List[Layer]:
+        """Returns all selected layers in the active frame that are visible and not locked."""
+        return [l for l in self.selected_layers if l and l.visible and not l.locked]
 
     def set_selected_layer_indices(self, indices: List[int]) -> None:
         if self.active_frame:
@@ -771,8 +1013,11 @@ class PixelDocument:
             return None
 
         src = self.animations[anim_index]
-        name = src.name.strip()
+        was_offloaded = not src._is_loaded
+        if was_offloaded:
+            src.ensure_loaded(self._temp_dir)
 
+        name = src.name.strip()
         if name.endswith(".R"):
             alt_name = name[:-2] + ".L"
         elif name.endswith(".r"):
@@ -786,6 +1031,15 @@ class PixelDocument:
 
         cloned = src.clone(name=alt_name)
         cloned.flip_horizontal(self.width)
+
+        if was_offloaded:
+            src.offload_to_disk(self._temp_dir)
+
+        # Offload currently active anim if different
+        if 0 <= self.active_animation_index < len(self.animations):
+            curr = self.animations[self.active_animation_index]
+            if curr._is_loaded:
+                curr.offload_to_disk(self._temp_dir)
 
         insert_pos = anim_index + 1
         self.animations.insert(insert_pos, cloned)
@@ -803,13 +1057,7 @@ class PixelDocument:
         offset_x: Optional[int] = None,
         offset_y: Optional[int] = None,
     ) -> None:
-        """Resizes canvas to new_width x new_height using an anchor position or custom offsets.
-
-        Anchor positions:
-          'top-left', 'top-center', 'top-right',
-          'middle-left', 'center', 'middle-right',
-          'bottom-left', 'bottom-center', 'bottom-right'
-        """
+        """Resizes canvas to new_width x new_height across all loaded and offloaded animations."""
         new_width = max(1, int(new_width))
         new_height = max(1, int(new_height))
 
@@ -847,6 +1095,9 @@ class PixelDocument:
             off_y = int(offset_y)
 
         for anim in self.animations:
+            was_offloaded = not anim._is_loaded
+            if was_offloaded:
+                anim.ensure_loaded(self._temp_dir)
             for frame in anim.frames:
                 for layer in frame.layers:
                     new_pixels: Dict[str, str] = {}
@@ -858,6 +1109,8 @@ class PixelDocument:
                             if 0 <= nx < new_width and 0 <= ny < new_height:
                                 new_pixels[f"{nx},{ny}"] = hex_str
                     layer.pixels = new_pixels
+            if was_offloaded:
+                anim.offload_to_disk(self._temp_dir)
 
         self.width = new_width
         self.height = new_height
@@ -873,6 +1126,9 @@ class PixelDocument:
         found = False
 
         for anim in self.animations:
+            was_offloaded = not anim._is_loaded
+            if was_offloaded:
+                anim.ensure_loaded(self._temp_dir)
             for frame in anim.frames:
                 for layer in frame.layers:
                     for coord_str in layer.pixels.keys():
@@ -890,6 +1146,8 @@ class PixelDocument:
                                 min_y = py
                             if py > max_y:
                                 max_y = py
+            if was_offloaded:
+                anim.offload_to_disk(self._temp_dir)
 
         if not found:
             return None
@@ -906,9 +1164,14 @@ class PixelDocument:
         return (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
 
     def to_dict(self) -> dict:
-        """Serializes document data into dictionary format suitable for pycaml encoding."""
-        frames_cnt = sum(len(a.frames) for a in self.animations) if self.animations else len(self.frames)
-        layers_cnt = len(self.frames[0].layers) if self.frames else 0
+        """Serializes document data into dictionary format suitable for pycaml encoding.
+        Preserves single-file format containing all animations.
+        """
+        frames_cnt = sum(
+            len(a.frames) if a._is_loaded else a._cached_frame_count
+            for a in self.animations
+        ) if self.animations else len(self.frames)
+        layers_cnt = len(self.frames[0].layers) if (self.frames and self.frames[0].layers) else 0
         return {
             "format": "coopixel",
             "version": "1.0",
@@ -930,9 +1193,9 @@ class PixelDocument:
             "active_path": self.active_path_index,
         }
 
-
     @classmethod
     def from_dict(cls, data: dict, filepath: Optional[str] = None) -> "PixelDocument":
+        """Reconstructs PixelDocument from dictionary and offloads inactive animations to temp disk."""
         width = int(data.get("width", 32))
         height = int(data.get("height", 32))
         doc = cls(width=width, height=height, filepath=filepath)
@@ -974,10 +1237,17 @@ class PixelDocument:
             doc.animations.append(anim)
 
         if not doc.animations:
-            doc.animations.append(Animation("new-animation"))
+            doc.animations.append(Animation("new-animation", pivot_x=def_px, pivot_y=def_py))
 
         active_anim_idx = int(data.get("active_animation", 0))
         doc.active_animation_index = max(0, min(active_anim_idx, len(doc.animations) - 1))
+
+        # Offload all inactive animations to temporary session disk folder
+        for i, anim in enumerate(doc.animations):
+            if i != doc.active_animation_index:
+                anim.offload_to_disk(doc._temp_dir)
+            else:
+                anim.ensure_loaded(doc._temp_dir)
 
         # Restore vector paths
         raw_paths = data.get("paths", [])
@@ -992,9 +1262,8 @@ class PixelDocument:
 
         return doc
 
-
     def save_to_pix(self, filepath: str, passphrase: str = None) -> None:
-        """Encodes document state to a pycaml .pix file."""
+        """Encodes document state to a pycaml .pix file (single persistent file)."""
         doc_dict = self.to_dict()
         cmap = CAMLMap(doc_dict)
         if passphrase:
@@ -1005,7 +1274,7 @@ class PixelDocument:
 
     @classmethod
     def load_from_pix(cls, filepath: str, passphrase: str = None) -> "PixelDocument":
-        """Loads and decodes document state from a pycaml .pix file."""
+        """Loads and decodes document state from a single pycaml .pix file."""
         if passphrase:
             cmap = CAMLMap.load_pix(filepath, passphrase=passphrase)
         else:
@@ -1016,6 +1285,12 @@ class PixelDocument:
         """Renders specified frame's layers into a single QImage with transparency and layer effects."""
         if not (0 <= frame_index < len(self.frames)):
             frame_index = self.active_frame_index
+        if not hasattr(self, "_frame_composite_cache"):
+            self._frame_composite_cache = {}
+        cache_key = (self.active_animation_index, frame_index)
+        if cache_key in self._frame_composite_cache:
+            return self._frame_composite_cache[cache_key]
+
         target_frame = self.frames[frame_index]
 
         w, h = self.width, self.height
@@ -1027,65 +1302,70 @@ class PixelDocument:
             if not layer.visible or layer.opacity <= 0:
                 continue
 
-            base_pixels = dict(layer.pixels)
+            has_paths = any(p.visible and p.anchors and (p.layer_id is None or p.layer_id == layer.name) and (p.frame_index is None or p.frame_index == frame_index) for p in self.paths)
+            has_effects = any(eff and eff.enabled for eff in layer.effects)
 
-            # Composite dynamic vector path pixels bound to this layer and frame
-            for path in self.paths:
-                if not path.visible or not path.anchors:
+            if not has_paths and not has_effects and getattr(layer, "_render_image", None) is not None:
+                layer_img = layer._render_image
+            else:
+                base_pixels = dict(layer.pixels)
+
+                # Composite dynamic vector path pixels bound to this layer and frame
+                if has_paths:
+                    for path in self.paths:
+                        if not path.visible or not path.anchors:
+                            continue
+                        if path.layer_id and path.layer_id != layer.name:
+                            continue
+                        if path.frame_index is not None and path.frame_index != frame_index:
+                            continue
+                        if path.stroked or path.filled:
+                            path_px = path.get_pixel_map(w, h)
+                            if path_px:
+                                base_pixels.update(path_px)
+
+                if not base_pixels:
                     continue
-                if path.layer_id and path.layer_id != layer.name:
-                    continue
-                if path.frame_index is not None and path.frame_index != frame_index:
-                    continue
-                if path.stroked or path.filled:
-                    path_px = path.get_pixel_map(w, h)
-                    if path_px:
-                        base_pixels.update(path_px)
 
+                # Compute layer effects if present
+                below_map: Dict[str, str] = {}
+                above_map: Dict[str, str] = {}
+                if has_effects:
+                    for eff in layer.effects:
+                        if eff and eff.enabled:
+                            if hasattr(eff, "process_pixels"):
+                                base_pixels = eff.process_pixels(base_pixels)
+                            b_dict, a_dict = eff.render_effect(base_pixels, w, h)
+                            below_map.update(b_dict)
+                            above_map.update(a_dict)
 
-            if not base_pixels:
-                continue
+                # Build layer buffer for fast rendering — write directly into bytearray using cached BGRA values
+                stride = w * 4
+                buf = bytearray(stride * h)  # all-transparent initially
 
-            # Compute layer effects if present
-            below_map: Dict[str, str] = {}
-            above_map: Dict[str, str] = {}
-            for eff in layer.effects:
-                if eff and eff.enabled:
-                    if hasattr(eff, "process_pixels"):
-                        base_pixels = eff.process_pixels(base_pixels)
-                    b_dict, a_dict = eff.render_effect(base_pixels, w, h)
-                    below_map.update(b_dict)
-                    above_map.update(a_dict)
+                def _write_pixels(pixel_map: Dict[str, str]) -> None:
+                    for coord, hex_str in pixel_map.items():
+                        parts = coord.split(",")
+                        if len(parts) == 2:
+                            x, y = int(parts[0]), int(parts[1])
+                            if 0 <= x < w and 0 <= y < h:
+                                b, g, r, a = hex_to_bgra(hex_str)
+                                idx = y * stride + x * 4
+                                buf[idx]     = b
+                                buf[idx + 1] = g
+                                buf[idx + 2] = r
+                                buf[idx + 3] = a
 
+                # 1. Below-effect pixels (e.g. outside stroke)
+                _write_pixels(below_map)
+                # 2. Base layer pixels (with color modifications applied)
+                _write_pixels(base_pixels)
+                # 3. Above-effect pixels (e.g. inside stroke)
+                _write_pixels(above_map)
 
-            # Build layer buffer for fast rendering — write directly into a bytearray
-            # instead of calling setPixelColor() per pixel (O(n) Qt→Python overhead).
-            # Format_ARGB32 byte order on LE: B, G, R, A.
-            stride = w * 4
-            buf = bytearray(stride * h)  # all-transparent initially
-
-            def _write_pixels(pixel_map: Dict[str, str]) -> None:
-                for coord, hex_str in pixel_map.items():
-                    parts = coord.split(",")
-                    if len(parts) == 2:
-                        x, y = int(parts[0]), int(parts[1])
-                        if 0 <= x < w and 0 <= y < h:
-                            col = hex_to_qcolor(hex_str)
-                            idx = y * stride + x * 4
-                            buf[idx]     = col.blue()
-                            buf[idx + 1] = col.green()
-                            buf[idx + 2] = col.red()
-                            buf[idx + 3] = col.alpha()
-
-            # 1. Below-effect pixels (e.g. outside stroke)
-            _write_pixels(below_map)
-            # 2. Base layer pixels (with color modifications applied)
-            _write_pixels(base_pixels)
-            # 3. Above-effect pixels (e.g. inside stroke)
-            _write_pixels(above_map)
-
-
-            layer_img = QImage(bytes(buf), w, h, stride, QImage.Format_ARGB32)
+                layer_img = QImage(bytes(buf), w, h, stride, QImage.Format_ARGB32)
+                if not has_paths and not has_effects:
+                    layer._render_image = layer_img
 
             if layer.opacity < 1.0:
                 painter.setOpacity(layer.opacity)
@@ -1094,6 +1374,7 @@ class PixelDocument:
             painter.drawImage(0, 0, layer_img)
 
         painter.end()
+        self._frame_composite_cache[cache_key] = image
         return image
 
     def render_composite_qimage(self) -> QImage:
@@ -1158,37 +1439,77 @@ class PixelDocument:
         """Returns a sorted list of all unique non-empty tags across all frames and animations."""
         tags = set()
         for anim in self.animations:
-            for frame in anim.frames:
-                for layer in frame.layers:
-                    if layer.tag and layer.tag.strip():
-                        tags.add(layer.tag.strip())
+            if anim._is_loaded:
+                for frame in anim.frames:
+                    for layer in frame.layers:
+                        if layer.tag and layer.tag.strip():
+                            tags.add(layer.tag.strip())
+            else:
+                tags.update(getattr(anim, "_cached_tags", set()))
         return sorted(list(tags))
 
+    def get_tag_layer_count(self, tag: str) -> int:
+        """Returns total layer count matching tag across all animations without disk I/O."""
+        target = tag.strip().lower()
+        count = 0
+        for anim in self.animations:
+            if anim._is_loaded:
+                for frame in anim.frames:
+                    for layer in frame.layers:
+                        if layer.tag and layer.tag.strip().lower() == target:
+                            count += 1
+            else:
+                for t, c in getattr(anim, "_cached_tag_counts", {}).items():
+                    if t.lower() == target:
+                        count += c
+        return count
+
     def get_layers_by_tag(self, tag: str) -> List[Layer]:
-        """Returns all layers with the given tag across all frames and animations."""
+        """Returns all loaded layers with the given tag across currently hydrated animations."""
         target = tag.strip().lower()
         matched = []
         for anim in self.animations:
-            for frame in anim.frames:
-                for layer in frame.layers:
-                    if layer.tag.strip().lower() == target:
-                        matched.append(layer)
+            if anim._is_loaded:
+                for frame in anim.frames:
+                    for layer in frame.layers:
+                        if layer.tag and layer.tag.strip().lower() == target:
+                            matched.append(layer)
         return matched
 
     def is_tag_visible(self, tag: str) -> bool:
-        """Returns True if any layer with the specified tag is visible."""
-        layers = self.get_layers_by_tag(tag)
-        if not layers:
-            return False
-        return any(l.visible for l in layers)
+        """Returns True if any layer with the specified tag is visible without disk thrashing."""
+        target = tag.strip().lower()
+        for anim in self.animations:
+            if anim._is_loaded:
+                for frame in anim.frames:
+                    for layer in frame.layers:
+                        if layer.tag and layer.tag.strip().lower() == target and layer.visible:
+                            return True
+            else:
+                overrides = getattr(anim, "_tag_visibility_overrides", {})
+                if target in overrides:
+                    if overrides[target]:
+                        return True
+                else:
+                    for t in getattr(anim, "_cached_tags", set()):
+                        if t.lower() == target:
+                            return True
+        return False
 
     def set_tag_visibility(self, tag: str, visible: bool) -> None:
         """Sets visibility for all layers across all frames and animations with the specified tag."""
         target = tag.strip().lower()
         for anim in self.animations:
-            for frame in anim.frames:
-                for layer in frame.layers:
-                    if layer.tag.strip().lower() == target:
-                        layer.visible = visible
+            if anim._is_loaded:
+                for frame in anim.frames:
+                    for layer in frame.layers:
+                        if layer.tag and layer.tag.strip().lower() == target:
+                            layer.visible = visible
+            else:
+                if not hasattr(anim, "_tag_visibility_overrides"):
+                    anim._tag_visibility_overrides = {}
+                anim._tag_visibility_overrides[target] = visible
+        self.invalidate_render_cache()
+
 
 

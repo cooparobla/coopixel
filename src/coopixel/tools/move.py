@@ -67,7 +67,7 @@ class MoveTool(Tool):
         self.is_drawing = True
         self.drag_start = (x, y)
 
-        if doc.active_path and (path_panel_open or len(doc.active_path.anchors) > 0):
+        if doc.active_path and path_panel_open and len(doc.active_path.anchors) > 0:
             self.moving_path = True
             self.initial_anchors = [(a.x, a.y) for a in doc.active_path.anchors]
             self.is_resizing = False
@@ -87,7 +87,7 @@ class MoveTool(Tool):
                     hit_handle = self.is_over_resize_handle(doc, screen_pos, pan_offset, zoom)
                 else:
                     bx, by, bw, bh = bbox
-                    hit_handle = (abs(x - (bx + bw)) <= 1) and (abs(y - (by + bh)) <= 1)
+                    hit_handle = (x == bx + bw) and (y == by + bh)
 
                 if hit_handle:
                     self.is_resizing = True

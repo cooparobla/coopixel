@@ -87,8 +87,8 @@ def test_move_tool_path_node_movement(qapp):
     path.add_anchor(AnchorPoint(8, 8))
 
     move = MoveTool()
-    move.mouse_press(doc, 0, 0, "#FF0000FF", "#00000000")
-    move.mouse_move(doc, 5, 5, "#FF0000FF", "#00000000")
+    move.mouse_press(doc, 0, 0, "#FF0000FF", "#00000000", path_panel_open=True)
+    move.mouse_move(doc, 5, 5, "#FF0000FF", "#00000000", path_panel_open=True)
 
     assert path.anchors[0].x == 7.0
     assert path.anchors[0].y == 7.0

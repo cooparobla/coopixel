@@ -94,7 +94,7 @@ def test_pen_tool_mouse_interaction():
     assert len(doc.active_path.anchors) == 1
 
     # Click 2: Add second anchor point and drag handle
-    pen.mouse_press(doc, 15, 10, "#FF0000FF", "#000000FF")
+    pen.mouse_press(doc, 15, 10, "#FF0000FF", "#000000FF", shift_pressed=True)
     pen.mouse_move(doc, 18, 12, "#FF0000FF", "#000000FF")
     pen.mouse_release(doc, 18, 12, "#FF0000FF", "#000000FF")
     assert len(doc.active_path.anchors) == 2
@@ -111,8 +111,10 @@ def test_pen_tool_mouse_interaction():
     pen.mouse_press(doc, 7, 8, "#FF0000FF", "#000000FF", shift_pressed=True)
     pen.mouse_move(doc, 10, 10, "#FF0000FF", "#000000FF")
     pen.mouse_release(doc, 10, 10, "#FF0000FF", "#000000FF")
-    assert doc.active_path.anchors[0].handle_in_x == 3.0
-    assert doc.active_path.anchors[0].handle_in_y == 2.0
+    assert doc.active_path.anchors[0].handle_out_x == 3.0
+    assert doc.active_path.anchors[0].handle_out_y == 2.0
+    assert doc.active_path.anchors[0].handle_in_x == -3.0
+    assert doc.active_path.anchors[0].handle_in_y == -2.0
 
 
 def test_clicking_first_anchor_does_not_close_path():

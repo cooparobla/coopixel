@@ -60,6 +60,7 @@ def test_align_panel_main_window_integration(qtbot):
 
     # Draw pixel block on layer
     mw.doc.active_layer.set_pixel(2, 2, "#00FF00FF")
+    mw._push_history()
 
     # Toggle align panel
     assert mw.align_panel.isVisible() is False

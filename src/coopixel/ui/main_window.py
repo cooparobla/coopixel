@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QImage, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -155,6 +156,7 @@ class MainWindow(QMainWindow):
         self.animation_panel.animation_structure_changed.connect(self.on_frame_structure_changed)
         self.animation_panel.frame_structure_changed.connect(self.on_frame_structure_changed)
         self.animation_panel.active_frame_changed.connect(self.on_active_frame_changed)
+        self.animation_panel.playback_frame_changed.connect(self.on_playback_frame_changed)
         self.animation_panel.animation_visual_changed.connect(self.canvas.update)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.animation_panel)
         self.animation_panel.hide()
@@ -516,6 +518,48 @@ class MainWindow(QMainWindow):
         self.border_act.triggered.connect(self._on_toggle_border_clicked)
         view_menu.addAction(self.border_act)
 
+        bg_menu = view_menu.addMenu("Canvas &Background Color")
+
+        bg_dark_act = QAction("🔳 Dark Checker (Default)", self)
+        bg_dark_act.triggered.connect(lambda: self.canvas.set_canvas_background("checker_dark"))
+        bg_menu.addAction(bg_dark_act)
+
+        bg_light_act = QAction("🔲 Light Checker", self)
+        bg_light_act.triggered.connect(lambda: self.canvas.set_canvas_background("checker_light"))
+        bg_menu.addAction(bg_light_act)
+
+        bg_mid_act = QAction("🏁 Medium Gray Checker", self)
+        bg_mid_act.triggered.connect(lambda: self.canvas.set_canvas_background("checker_medium"))
+        bg_menu.addAction(bg_mid_act)
+
+        bg_menu.addSeparator()
+
+        bg_solid_dark = QAction("⬛ Solid Dark Gray (#1E1E1E)", self)
+        bg_solid_dark.triggered.connect(lambda: self.canvas.set_canvas_background("solid", "#1E1E1E"))
+        bg_menu.addAction(bg_solid_dark)
+
+        bg_solid_mid = QAction("🔲 Solid Neutral Gray (#808080)", self)
+        bg_solid_mid.triggered.connect(lambda: self.canvas.set_canvas_background("solid", "#808080"))
+        bg_menu.addAction(bg_solid_mid)
+
+        bg_solid_white = QAction("⬜ Solid White (#FFFFFF)", self)
+        bg_solid_white.triggered.connect(lambda: self.canvas.set_canvas_background("solid", "#FFFFFF"))
+        bg_menu.addAction(bg_solid_white)
+
+        bg_solid_black = QAction("⬛ Solid Pitch Black (#000000)", self)
+        bg_solid_black.triggered.connect(lambda: self.canvas.set_canvas_background("solid", "#000000"))
+        bg_menu.addAction(bg_solid_black)
+
+        bg_solid_green = QAction("🟩 Chroma Key Green (#00FF00)", self)
+        bg_solid_green.triggered.connect(lambda: self.canvas.set_canvas_background("solid", "#00FF00"))
+        bg_menu.addAction(bg_solid_green)
+
+        bg_menu.addSeparator()
+
+        bg_custom_act = QAction("🎨 Custom Solid Color...", self)
+        bg_custom_act.triggered.connect(self._on_pick_custom_canvas_bg)
+        bg_menu.addAction(bg_custom_act)
+
         view_menu.addSeparator()
 
         toggle_layers_act = self.layer_panel.toggleViewAction()
@@ -828,6 +872,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         """Intercepts window close event to prompt for unsaved changes."""
         if self.maybe_save_changes(action_desc="closing"):
+            if hasattr(self, "doc") and self.doc:
+                self.doc.cleanup()
             event.accept()
         else:
             event.ignore()
@@ -844,7 +890,9 @@ class MainWindow(QMainWindow):
 
     def _restore_from_dict(self, state: dict) -> None:
         """Restore document and selection state from a state dict and update all UI, preserving current view."""
-        filepath = self.doc.filepath
+        filepath = self.doc.filepath if hasattr(self, "doc") and self.doc else None
+        if hasattr(self, "doc") and self.doc:
+            self.doc.cleanup()
         # Save current view state before swapping the document
         saved_zoom = self.canvas.zoom_level
         saved_pan = self.canvas.pan_offset
@@ -875,8 +923,6 @@ class MainWindow(QMainWindow):
         """Called when a path is added, modified, stroked, filled, or deleted."""
         self.canvas.invalidate_cache()
         self.canvas.update()
-        self.path_panel.refresh_panel()
-        self._push_history()
 
     def on_path_selected(self, path_idx: int) -> None:
         """Called when user selects a path in the Paths panel."""
@@ -902,12 +948,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def on_stroke_committed(self) -> None:
-        """Called when a drawing stroke completes — pushes history and refreshes panels."""
+        """Called when a drawing stroke completes — pushes history and updates canvas/timeline."""
         self._push_history()
-        self.layer_panel.refresh_list()
-        self.appearance_panel.refresh_panel()
-        self.animation_panel.refresh_timeline()
-        self.tag_panel.refresh_tags()
+        self.animation_panel.invalidate_thumbnail(self.doc.active_frame_index)
         self.canvas.invalidate_cache()
         self.canvas.update()
 
@@ -915,6 +958,7 @@ class MainWindow(QMainWindow):
         """Called when layers/effects/tags are added/deleted/reordered/duplicated — push history."""
         self._push_history()
         self.appearance_panel.refresh_panel()
+        self.animation_panel.invalidate_thumbnail()
         self.animation_panel.refresh_timeline()
         self.tag_panel.refresh_tags()
         self.canvas.invalidate_cache()
@@ -923,6 +967,7 @@ class MainWindow(QMainWindow):
     def on_layer_visual_changed(self) -> None:
         """Called when layer visibility/opacity/lock changes — repaint only, no history."""
         self.appearance_panel.refresh_panel()
+        self.animation_panel.invalidate_thumbnail()
         self.animation_panel.refresh_timeline()
         self.tag_panel.refresh_tags()
         self.canvas.invalidate_cache()
@@ -945,18 +990,25 @@ class MainWindow(QMainWindow):
         self.appearance_panel.refresh_panel()
         self.canvas.update()
 
-    def on_active_frame_changed(self) -> None:
-        """Called when active frame is changed — updates layer panel, appearance panel, path panel & canvas."""
+    def on_playback_frame_changed(self, frame_index: int) -> None:
+        """Lightweight handler for playback timer ticks — updates canvas without side panel overhead."""
         self.canvas.invalidate_cache()
+        self.canvas.update()
+
+    def on_active_frame_changed(self) -> None:
+        """Called when active frame is changed manually or on pause/stop — updates layer panel, appearance panel & canvas."""
+        self.canvas.invalidate_cache()
+        self.canvas.update()
         self.layer_panel.refresh_list()
         self.appearance_panel.refresh_panel()
-        self.tag_panel.refresh_tags()
-        self.path_panel.refresh_panel()
         if self.doc and self.doc.active_animation:
             anim = self.doc.active_animation
             self.tool_panel.update_pivot_spins(anim.pivot_x, anim.pivot_y)
-        self.canvas.update()
 
+    def _on_pick_custom_canvas_bg(self) -> None:
+        col = QColorDialog.getColor(self.canvas.bg_color, self, "Select Canvas Background Color")
+        if col.isValid():
+            self.canvas.set_canvas_background("solid", col)
 
     def on_undo(self) -> None:
         prev_state = self.history.undo()
@@ -1379,6 +1431,8 @@ class MainWindow(QMainWindow):
         dlg = NewCanvasDialog(self)
         if dlg.exec() == NewCanvasDialog.Accepted:
             w, h, bg = dlg.get_values()
+            if hasattr(self, "doc") and self.doc:
+                self.doc.cleanup()
             self.doc = PixelDocument(w, h)
             if bg == "White":
                 bg_layer = self.doc.active_layer
@@ -1417,6 +1471,8 @@ class MainWindow(QMainWindow):
             self.update_window_title()
             return True
         try:
+            if hasattr(self, "doc") and self.doc:
+                self.doc.cleanup()
             self.doc = PixelDocument.load_from_pix(filepath)
             self.history.clear()
             self.canvas.selection.clear()
